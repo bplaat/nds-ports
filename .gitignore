@@ -1,0 +1,8 @@
+# Build work directories, sources and resulting ROMs
+/*/build/
+
+# Game data, embedded into the ROMs at build time (never commit it)
+/*/assets/
+
+# macOS Finder metadata
+.DS_Store

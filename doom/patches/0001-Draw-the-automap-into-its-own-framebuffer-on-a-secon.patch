@@ -1,0 +1,245 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Wed, 30 Sep 2026 13:41:47 +0200
+Subject: [PATCH] Draw the automap into its own framebuffer on a second screen
+
+AM_SetFramebuffer() makes the automap render into a separate buffer of a
+different size, such as the touch screen of a Nintendo DS. The player
+view, border and status bar then keep being drawn on the main screen
+while the map is up, and automap marks are drawn into that buffer too.
+
+HU_LevelTitle() exposes the level name, for a HUD on a second screen.
+---
+ doomgeneric/am_map.c   | 51 ++++++++++++++++++++++++++++++++++++++++--
+ doomgeneric/am_map.h   |  5 +++++
+ doomgeneric/d_main.c   |  8 +++----
+ doomgeneric/hu_lib.c   |  3 ++-
+ doomgeneric/hu_stuff.c |  8 +++++++
+ doomgeneric/hu_stuff.h |  1 +
+ doomgeneric/st_stuff.c |  2 +-
+ 7 files changed, 70 insertions(+), 8 deletions(-)
+
+diff --git a/doomgeneric/am_map.c b/doomgeneric/am_map.c
+index d3d504e..89f6dcc 100644
+--- a/doomgeneric/am_map.c
++++ b/doomgeneric/am_map.c
+@@ -31,6 +31,7 @@
+ #include "m_cheat.h"
+ #include "m_controls.h"
+ #include "m_misc.h"
++#include "i_swap.h"
+ #include "i_system.h"
+ 
+ // Needs access to LFB.
+@@ -211,6 +212,7 @@ static int	f_h;
+ 
+ static int 	lightlev; 		// used for funky strobing effect
+ static byte*	fb; 			// pseudo-frame buffer
++static byte*	am_fb;			// separate automap screen, if any
+ static int 	amclock;
+ 
+ static mpoint_t m_paninc; // how far the window pans each tic (map coords)
+@@ -421,13 +423,27 @@ void AM_changeWindowLoc(void)
+ //
+ //
+ //
++// Draws the automap into its own framebuffer (e.g. a second screen)
++// instead of over the player view.
++void AM_SetFramebuffer(byte *buffer, int width, int height)
++{
++    am_fb = buffer;
++    finit_width = width;
++    finit_height = height;
++}
++
++boolean AM_HasOwnScreen(void)
++{
++    return am_fb != NULL;
++}
++
+ void AM_initVariables(void)
+ {
+     int pnum;
+     static event_t st_notify = { ev_keyup, AM_MSGENTERED, 0, 0 };
+ 
+     automapactive = true;
+-    fb = I_VideoBuffer;
++    fb = am_fb != NULL ? am_fb : I_VideoBuffer;
+ 
+     f_oldloc.x = INT_MAX;
+     amclock = 0;
+@@ -1308,6 +1324,32 @@ AM_drawThings
+     }
+ }
+ 
++// V_DrawPatch only knows the main screen, so draw marks into fb directly
++static void AM_drawPatch(int x, int y, patch_t *patch)
++{
++    int col, w = SHORT(patch->width);
++
++    for (col = 0; col < w; col++)
++    {
++        column_t *column = (column_t *) ((byte *) patch + LONG(patch->columnofs[col]));
++
++        while (column->topdelta != 0xff)
++        {
++            byte *source = (byte *) column + 3;
++            int i;
++
++            for (i = 0; i < column->length; i++)
++            {
++                int py = y + column->topdelta + i;
++
++                if (x + col >= 0 && x + col < f_w && py >= 0 && py < f_h)
++                    fb[py * f_w + x + col] = source[i];
++            }
++            column = (column_t *) ((byte *) column + column->length + 4);
++        }
++    }
++}
++
+ void AM_drawMarks(void)
+ {
+     int i, fx, fy, w, h;
+@@ -1323,7 +1365,12 @@ void AM_drawMarks(void)
+ 	    fx = CXMTOF(markpoints[i].x);
+ 	    fy = CYMTOF(markpoints[i].y);
+ 	    if (fx >= f_x && fx <= f_w - w && fy >= f_y && fy <= f_h - h)
+-		V_DrawPatch(fx, fy, marknums[i]);
++	    {
++		if (am_fb != NULL)
++		    AM_drawPatch(fx, fy, marknums[i]);
++		else
++		    V_DrawPatch(fx, fy, marknums[i]);
++	    }
+ 	}
+     }
+ 
+diff --git a/doomgeneric/am_map.h b/doomgeneric/am_map.h
+index 572d238..be38995 100644
+--- a/doomgeneric/am_map.h
++++ b/doomgeneric/am_map.h
+@@ -38,6 +38,11 @@ void AM_Ticker (void);
+ // called instead of view drawer if automap active.
+ void AM_Drawer (void);
+ 
++// Render the automap into a separate framebuffer of the given size,
++// the player view then keeps being drawn while the automap is active.
++void AM_SetFramebuffer(byte *buffer, int width, int height);
++boolean AM_HasOwnScreen(void);
++
+ // Called to force the automap to quit
+ // if the level is completed while it is up.
+ void AM_Stop (void);
+diff --git a/doomgeneric/d_main.c b/doomgeneric/d_main.c
+index 9012e5f..4014653 100644
+--- a/doomgeneric/d_main.c
++++ b/doomgeneric/d_main.c
+@@ -239,8 +239,8 @@ void D_Display (void)
+     // draw buffered stuff to screen
+     I_UpdateNoBlit ();
+     
+-    // draw the view directly
+-    if (gamestate == GS_LEVEL && !automapactive && gametic)
++    // draw the view directly, the automap may live on its own screen
++    if (gamestate == GS_LEVEL && (!automapactive || AM_HasOwnScreen()) && gametic)
+     	R_RenderPlayerView (&players[displayplayer]);
+ 
+     if (gamestate == GS_LEVEL && gametic)
+@@ -258,7 +258,7 @@ void D_Display (void)
+     }
+ 
+     // see if the border needs to be updated to the screen
+-    if (gamestate == GS_LEVEL && !automapactive && scaledviewwidth != 320)
++    if (gamestate == GS_LEVEL && (!automapactive || AM_HasOwnScreen()) && scaledviewwidth != 320)
+     {
+ 		if (menuactive || menuactivestate || !viewactivestate)
+ 			borderdrawcount = 3;
+@@ -284,7 +284,7 @@ void D_Display (void)
+     // draw pause pic
+     if (paused)
+     {
+-		if (automapactive)
++		if (automapactive && !AM_HasOwnScreen())
+ 			y = 4;
+ 		else
+ 			y = viewwindowy+4;
+diff --git a/doomgeneric/hu_lib.c b/doomgeneric/hu_lib.c
+index 47038a0..04e34ba 100644
+--- a/doomgeneric/hu_lib.c
++++ b/doomgeneric/hu_lib.c
+@@ -20,6 +20,7 @@
+ 
+ #include "doomdef.h"
+ #include "doomkeys.h"
++#include "am_map.h"
+ 
+ #include "v_video.h"
+ #include "i_swap.h"
+@@ -144,7 +145,7 @@ void HUlib_eraseTextLine(hu_textline_t* l)
+     // and the text must either need updating or refreshing
+     // (because of a recent change back from the automap)
+ 
+-    if (!automapactive &&
++    if ((!automapactive || AM_HasOwnScreen()) &&
+ 	viewwindowx && l->needsupdate)
+     {
+ 	lh = SHORT(l->f[0]->height) + 1;
+diff --git a/doomgeneric/hu_stuff.c b/doomgeneric/hu_stuff.c
+index b63cac7..76aa9b6 100644
+--- a/doomgeneric/hu_stuff.c
++++ b/doomgeneric/hu_stuff.c
+@@ -87,6 +87,7 @@ char			chat_char; // remove later.
+ static player_t*	plr;
+ patch_t*		hu_font[HU_FONTSIZE];
+ static hu_textline_t	w_title;
++static char		*level_title = "";
+ boolean			chat_on;
+ static hu_itext_t	w_chat;
+ static boolean		always_off = false;
+@@ -362,6 +363,7 @@ void HU_Start(void)
+     // dehacked substitution to get modified level name
+ 
+     s = DEH_String(s);
++    level_title = s;
+     
+     while (*s)
+ 	HUlib_addCharToTextLine(&w_title, *(s++));
+@@ -390,6 +392,12 @@ void HU_Drawer(void)
+ 
+ }
+ 
++// The current level's name, eg. "E1M1: Hangar"
++const char *HU_LevelTitle(void)
++{
++    return level_title;
++}
++
+ void HU_Erase(void)
+ {
+ 
+diff --git a/doomgeneric/hu_stuff.h b/doomgeneric/hu_stuff.h
+index a3affc5..bb58e0f 100644
+--- a/doomgeneric/hu_stuff.h
++++ b/doomgeneric/hu_stuff.h
+@@ -52,6 +52,7 @@ void HU_Ticker(void);
+ void HU_Drawer(void);
+ char HU_dequeueChatChar(void);
+ void HU_Erase(void);
++const char *HU_LevelTitle(void);
+ 
+ extern char *chat_macros[10];
+ 
+diff --git a/doomgeneric/st_stuff.c b/doomgeneric/st_stuff.c
+index e25accc..e8070c0 100644
+--- a/doomgeneric/st_stuff.c
++++ b/doomgeneric/st_stuff.c
+@@ -1055,7 +1055,7 @@ void ST_diffDraw(void)
+ void ST_Drawer (boolean fullscreen, boolean refresh)
+ {
+   
+-    st_statusbaron = (!fullscreen) || automapactive;
++    st_statusbaron = (!fullscreen) || (automapactive && !AM_HasOwnScreen());
+     st_firsttime = st_firsttime || refresh;
+ 
+     // Do red-/gold-shifts from damage/items
