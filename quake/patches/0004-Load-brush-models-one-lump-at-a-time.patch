@@ -1,0 +1,360 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Wed, 30 Sep 2026 14:20:55 +0200
+Subject: [PATCH] Load brush models one lump at a time
+
+Mod_LoadModel read the whole .bsp into temporary hunk memory before
+parsing it, which is more than 1 MiB for most maps and most of what the
+DS has. Brush models are now read from the file lump by lump, only one
+lump at a time in temporary memory, and the textures are read one by one
+straight into their place in the hunk. Alias and sprite models are small
+and still load in one piece.
+---
+ WinQuake/model.c | 149 +++++++++++++++++++++++++++++------------------
+ 1 file changed, 92 insertions(+), 57 deletions(-)
+
+diff --git a/WinQuake/model.c b/WinQuake/model.c
+index 940f7fe..9d0d292 100644
+--- a/WinQuake/model.c
++++ b/WinQuake/model.c
+@@ -35,6 +35,9 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash);
+ 
+ byte	mod_novis[MAX_MAP_LEAFS/8];
+ 
++FILE	*mod_file;		// the brush model being loaded
++int		mod_filebase;
++
+ #define	MAX_MOD_KNOWN	256
+ model_t	mod_known[MAX_MOD_KNOWN];
+ int		mod_numknown;
+@@ -256,7 +259,7 @@ Loads a model into the cache
+ model_t *Mod_LoadModel (model_t *mod, qboolean crash)
+ {
+ 	unsigned *buf;
+-	byte	stackbuf[1024];		// avoid dirtying the cache heap
++	unsigned	stackbuf[256];		// avoid dirtying the cache heap
+ 
+ 	if (mod->type == mod_alias)
+ 	{
+@@ -275,18 +278,16 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash)
+ //
+ // because the world is so huge, load it one piece at a time
+ //
+-	
+-//
+-// load the file
+-//
+-	buf = (unsigned *)COM_LoadStackFile (mod->name, stackbuf, sizeof(stackbuf));
+-	if (!buf)
++	if (COM_FOpenFile (mod->name, &mod_file) < 0)
+ 	{
+ 		if (crash)
+ 			Sys_Error ("Mod_NumForName: %s not found", mod->name);
+ 		return NULL;
+ 	}
+-	
++	mod_filebase = ftell (mod_file);
++	if (fread (stackbuf, 1, sizeof(dheader_t), mod_file) < 4)
++		Sys_Error ("Mod_LoadModel: %s is truncated", mod->name);
++
+ //
+ // allocate a new model
+ //
+@@ -301,18 +302,22 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash)
+ // call the apropriate loader
+ 	mod->needload = NL_PRESENT;
+ 
+-	switch (LittleLong(*(unsigned *)buf))
++	switch (LittleLong(*(unsigned *)stackbuf))
+ 	{
+ 	case IDPOLYHEADER:
+-		Mod_LoadAliasModel (mod, buf);
+-		break;
+-		
+ 	case IDSPRITEHEADER:
+-		Mod_LoadSpriteModel (mod, buf);
++		// the others are small, load them in one piece
++		fclose (mod_file);
++		buf = (unsigned *)COM_LoadStackFile (mod->name, stackbuf, sizeof(stackbuf));
++		if (LittleLong(*buf) == IDPOLYHEADER)
++			Mod_LoadAliasModel (mod, buf);
++		else
++			Mod_LoadSpriteModel (mod, buf);
+ 		break;
+ 	
+ 	default:
+-		Mod_LoadBrushModel (mod, buf);
++		Mod_LoadBrushModel (mod, stackbuf);
++		fclose (mod_file);
+ 		break;
+ 	}
+ 
+@@ -344,7 +349,37 @@ model_t *Mod_ForName (char *name, qboolean crash)
+ ===============================================================================
+ */
+ 
+-byte	*mod_base;
++/*
++=================
++Mod_ReadLump
++
++Reads len bytes from ofs into a lump of the brush model being loaded
++=================
++*/
++void Mod_ReadLump (lump_t *l, int ofs, void *dest, int len)
++{
++	if (ofs < 0 || len < 0 || ofs + len > l->filelen)
++		Sys_Error ("Mod_ReadLump: bad lump in %s", loadmodel->name);
++	fseek (mod_file, mod_filebase + l->fileofs + ofs, SEEK_SET);
++	if (fread (dest, 1, len, mod_file) != len)
++		Sys_Error ("Mod_ReadLump: %s is truncated", loadmodel->name);
++}
++
++/*
++=================
++Mod_LoadLump
++
++Reads a lump into temporary memory, which the next one reuses
++=================
++*/
++void *Mod_LoadLump (lump_t *l)
++{
++	void	*buf;
++
++	buf = Hunk_TempAlloc (l->filelen);
++	Mod_ReadLump (l, 0, buf, l->filelen);
++	return buf;
++}
+ 
+ 
+ /*
+@@ -354,58 +389,60 @@ Mod_LoadTextures
+ */
+ void Mod_LoadTextures (lump_t *l)
+ {
+-	int		i, j, pixels, num, max, altmax;
+-	miptex_t	*mt;
++	int		i, j, pixels, num, max, altmax, nummiptex;
++	int		*dataofs;
++	miptex_t	mt;
+ 	texture_t	*tx, *tx2;
+ 	texture_t	*anims[10];
+ 	texture_t	*altanims[10];
+-	dmiptexlump_t *m;
+ 
+ 	if (!l->filelen)
+ 	{
+ 		loadmodel->textures = NULL;
+ 		return;
+ 	}
+-	m = (dmiptexlump_t *)(mod_base + l->fileofs);
+-	
+-	m->nummiptex = LittleLong (m->nummiptex);
++	// each texture is read straight into place, not the whole lump at once
++	Mod_ReadLump (l, 0, &nummiptex, sizeof(nummiptex));
++	nummiptex = LittleLong (nummiptex);
++	dataofs = Hunk_TempAlloc (nummiptex * sizeof(*dataofs));
++	Mod_ReadLump (l, sizeof(nummiptex), dataofs, nummiptex * sizeof(*dataofs));
+ 	
+-	loadmodel->numtextures = m->nummiptex;
+-	loadmodel->textures = Hunk_AllocName (m->nummiptex * sizeof(*loadmodel->textures) , loadname);
++	loadmodel->numtextures = nummiptex;
++	loadmodel->textures = Hunk_AllocName (nummiptex * sizeof(*loadmodel->textures) , loadname);
+ 
+-	for (i=0 ; i<m->nummiptex ; i++)
++	for (i=0 ; i<nummiptex ; i++)
+ 	{
+-		m->dataofs[i] = LittleLong(m->dataofs[i]);
+-		if (m->dataofs[i] == -1)
++		dataofs[i] = LittleLong(dataofs[i]);
++		if (dataofs[i] == -1)
+ 			continue;
+-		mt = (miptex_t *)((byte *)m + m->dataofs[i]);
+-		mt->width = LittleLong (mt->width);
+-		mt->height = LittleLong (mt->height);
++		Mod_ReadLump (l, dataofs[i], &mt, sizeof(mt));
++		mt.width = LittleLong (mt.width);
++		mt.height = LittleLong (mt.height);
+ 		for (j=0 ; j<MIPLEVELS ; j++)
+-			mt->offsets[j] = LittleLong (mt->offsets[j]);
++			mt.offsets[j] = LittleLong (mt.offsets[j]);
+ 		
+-		if ( (mt->width & 15) || (mt->height & 15) )
+-			Sys_Error ("Texture %s is not 16 aligned", mt->name);
+-		pixels = mt->width*mt->height/64*85;
++		if ( (mt.width & 15) || (mt.height & 15) )
++			Sys_Error ("Texture %s is not 16 aligned", mt.name);
++		pixels = mt.width*mt.height/64*85;
+ 		tx = Hunk_AllocName (sizeof(texture_t) +pixels, loadname );
+ 		loadmodel->textures[i] = tx;
+ 
+-		memcpy (tx->name, mt->name, sizeof(tx->name));
+-		tx->width = mt->width;
+-		tx->height = mt->height;
++		memcpy (tx->name, mt.name, sizeof(tx->name));
++		tx->width = mt.width;
++		tx->height = mt.height;
+ 		for (j=0 ; j<MIPLEVELS ; j++)
+-			tx->offsets[j] = mt->offsets[j] + sizeof(texture_t) - sizeof(miptex_t);
++			tx->offsets[j] = mt.offsets[j] + sizeof(texture_t) - sizeof(miptex_t);
+ 		// the pixels immediately follow the structures
+-		memcpy ( tx+1, mt+1, pixels);
++		Mod_ReadLump (l, dataofs[i] + sizeof(mt), tx+1, pixels);
+ 		
+-		if (!Q_strncmp(mt->name,"sky",3))	
++		if (!Q_strncmp(mt.name,"sky",3))
+ 			R_InitSky (tx);
+ 	}
+ 
+ //
+ // sequence the animations
+ //
+-	for (i=0 ; i<m->nummiptex ; i++)
++	for (i=0 ; i<nummiptex ; i++)
+ 	{
+ 		tx = loadmodel->textures[i];
+ 		if (!tx || tx->name[0] != '+')
+@@ -438,7 +475,7 @@ void Mod_LoadTextures (lump_t *l)
+ 		else
+ 			Sys_Error ("Bad animating texture %s", tx->name);
+ 
+-		for (j=i+1 ; j<m->nummiptex ; j++)
++		for (j=i+1 ; j<nummiptex ; j++)
+ 		{
+ 			tx2 = loadmodel->textures[j];
+ 			if (!tx2 || tx2->name[0] != '+')
+@@ -509,7 +546,7 @@ void Mod_LoadLighting (lump_t *l)
+ 		return;
+ 	}
+ 	loadmodel->lightdata = Hunk_AllocName ( l->filelen, loadname);	
+-	memcpy (loadmodel->lightdata, mod_base + l->fileofs, l->filelen);
++	Mod_ReadLump (l, 0, loadmodel->lightdata, l->filelen);
+ }
+ 
+ 
+@@ -526,7 +563,7 @@ void Mod_LoadVisibility (lump_t *l)
+ 		return;
+ 	}
+ 	loadmodel->visdata = Hunk_AllocName ( l->filelen, loadname);	
+-	memcpy (loadmodel->visdata, mod_base + l->fileofs, l->filelen);
++	Mod_ReadLump (l, 0, loadmodel->visdata, l->filelen);
+ }
+ 
+ 
+@@ -543,7 +580,7 @@ void Mod_LoadEntities (lump_t *l)
+ 		return;
+ 	}
+ 	loadmodel->entities = Hunk_AllocName ( l->filelen, loadname);	
+-	memcpy (loadmodel->entities, mod_base + l->fileofs, l->filelen);
++	Mod_ReadLump (l, 0, loadmodel->entities, l->filelen);
+ }
+ 
+ 
+@@ -558,7 +595,7 @@ void Mod_LoadVertexes (lump_t *l)
+ 	mvertex_t	*out;
+ 	int			i, count;
+ 
+-	in = (void *)(mod_base + l->fileofs);
++	in = Mod_LoadLump (l);
+ 	if (l->filelen % sizeof(*in))
+ 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+ 	count = l->filelen / sizeof(*in);
+@@ -586,7 +623,7 @@ void Mod_LoadSubmodels (lump_t *l)
+ 	dmodel_t	*out;
+ 	int			i, j, count;
+ 
+-	in = (void *)(mod_base + l->fileofs);
++	in = Mod_LoadLump (l);
+ 	if (l->filelen % sizeof(*in))
+ 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+ 	count = l->filelen / sizeof(*in);
+@@ -622,7 +659,7 @@ void Mod_LoadEdges (lump_t *l)
+ 	medge_t *out;
+ 	int 	i, count;
+ 
+-	in = (void *)(mod_base + l->fileofs);
++	in = Mod_LoadLump (l);
+ 	if (l->filelen % sizeof(*in))
+ 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+ 	count = l->filelen / sizeof(*in);
+@@ -651,7 +688,7 @@ void Mod_LoadTexinfo (lump_t *l)
+ 	int		miptex;
+ 	float	len1, len2;
+ 
+-	in = (void *)(mod_base + l->fileofs);
++	in = Mod_LoadLump (l);
+ 	if (l->filelen % sizeof(*in))
+ 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+ 	count = l->filelen / sizeof(*in);
+@@ -773,7 +810,7 @@ void Mod_LoadFaces (lump_t *l)
+ 	int			i, count, surfnum;
+ 	int			planenum, side;
+ 
+-	in = (void *)(mod_base + l->fileofs);
++	in = Mod_LoadLump (l);
+ 	if (l->filelen % sizeof(*in))
+ 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+ 	count = l->filelen / sizeof(*in);
+@@ -856,7 +893,7 @@ void Mod_LoadNodes (lump_t *l)
+ 	dnode_t		*in;
+ 	mnode_t 	*out;
+ 
+-	in = (void *)(mod_base + l->fileofs);
++	in = Mod_LoadLump (l);
+ 	if (l->filelen % sizeof(*in))
+ 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+ 	count = l->filelen / sizeof(*in);
+@@ -903,7 +940,7 @@ void Mod_LoadLeafs (lump_t *l)
+ 	mleaf_t 	*out;
+ 	int			i, j, count, p;
+ 
+-	in = (void *)(mod_base + l->fileofs);
++	in = Mod_LoadLump (l);
+ 	if (l->filelen % sizeof(*in))
+ 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+ 	count = l->filelen / sizeof(*in);
+@@ -950,7 +987,7 @@ void Mod_LoadClipnodes (lump_t *l)
+ 	int			i, count;
+ 	hull_t		*hull;
+ 
+-	in = (void *)(mod_base + l->fileofs);
++	in = Mod_LoadLump (l);
+ 	if (l->filelen % sizeof(*in))
+ 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+ 	count = l->filelen / sizeof(*in);
+@@ -1041,7 +1078,7 @@ void Mod_LoadMarksurfaces (lump_t *l)
+ 	short		*in;
+ 	msurface_t **out;
+ 	
+-	in = (void *)(mod_base + l->fileofs);
++	in = Mod_LoadLump (l);
+ 	if (l->filelen % sizeof(*in))
+ 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+ 	count = l->filelen / sizeof(*in);
+@@ -1069,7 +1106,7 @@ void Mod_LoadSurfedges (lump_t *l)
+ 	int		i, count;
+ 	int		*in, *out;
+ 	
+-	in = (void *)(mod_base + l->fileofs);
++	in = Mod_LoadLump (l);
+ 	if (l->filelen % sizeof(*in))
+ 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+ 	count = l->filelen / sizeof(*in);
+@@ -1095,7 +1132,7 @@ void Mod_LoadPlanes (lump_t *l)
+ 	int			count;
+ 	int			bits;
+ 	
+-	in = (void *)(mod_base + l->fileofs);
++	in = Mod_LoadLump (l);
+ 	if (l->filelen % sizeof(*in))
+ 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+ 	count = l->filelen / sizeof(*in);
+@@ -1158,8 +1195,6 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
+ 		Sys_Error ("Mod_LoadBrushModel: %s has wrong version number (%i should be %i)", mod->name, i, BSPVERSION);
+ 
+ // swap all the lumps
+-	mod_base = (byte *)header;
+-
+ 	for (i=0 ; i<sizeof(dheader_t)/4 ; i++)
+ 		((int *)header)[i] = LittleLong ( ((int *)header)[i]);
+ 

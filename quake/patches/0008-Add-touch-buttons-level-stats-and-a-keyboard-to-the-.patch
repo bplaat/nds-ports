@@ -1,0 +1,415 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Wed, 30 Sep 2026 15:43:16 +0200
+Subject: [PATCH] Add touch buttons, level stats and a keyboard to the touch
+ screen
+
+Above the status bar the touch screen shows the level name, kills,
+secrets and time, and buttons for jump, scores, center view and the
+console. Tapping the weapon icons of the status bar selects a weapon.
+With the console or a chat message open a keyboard covers the lower
+half. The buttons send the keys of the default bindings. Dragging the
+stylus anywhere else still looks around.
+
+The UI rows are kept out of the view rectangle that is cleared every
+frame and only redrawn when what they show changes or something else
+drew over them, and the changed rows of the 2D drawing are tracked per
+row instead of as one range.
+---
+ WinQuake/in_nds.c  | 214 ++++++++++++++++++++++++++++++++++++++++++++-
+ WinQuake/input.h   |   5 ++
+ WinQuake/vid.h     |   5 ++
+ WinQuake/vid_nds.c |  71 +++++++++------
+ 4 files changed, 264 insertions(+), 31 deletions(-)
+
+diff --git a/WinQuake/in_nds.c b/WinQuake/in_nds.c
+index 02707ef..506e5db 100644
+--- a/WinQuake/in_nds.c
++++ b/WinQuake/in_nds.c
+@@ -20,8 +20,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ // in_nds.c -- Nintendo DS buttons and touch screen
+ //
+ // The buttons send the keys of Quake's default bindings in game and the menu
+-// keys everywhere else, so they can still be rebound. Dragging the stylus
+-// over the touch screen looks around like a mouse.
++// keys everywhere else, so they can still be rebound. The touch screen, the
++// 2D drawing, has a level stats panel and touch buttons above the status bar
++// in game, its weapon icons select weapons and a keyboard shows with the
++// console. Dragging the stylus anywhere else looks around like a mouse.
+ 
+ #include "quakedef.h"
+ 
+@@ -61,6 +63,198 @@ static int	held_key[NUM_BUTTONS];
+ 
+ static qboolean	touching;
+ static int	touch_x, touch_y, mouse_x, mouse_y;
++static int	touch_key;		// held by the stylus
++
++// Touch buttons in 2D coordinates, 320x200
++typedef struct
++{
++	int			x, y, w, h;
++	int			key;
++	const char	*label;		// NULL when the status bar draws it
++} touchbutton_t;
++
++#define	BUTTONS_Y	130
++#define	STATS_Y		104
++
++static const touchbutton_t gamebuttons[] =
++{
++	{  0, BUTTONS_Y, 80, 20, K_SPACE, "JUMP"},			// +jump
++	{ 80, BUTTONS_Y, 80, 20, K_TAB, "SCORES"},			// +showscores
++	{160, BUTTONS_Y, 80, 20, K_END, "CENTER"},			// centerview
++	{240, BUTTONS_Y, 80, 20, '`', "CONSOLE"},			// toggleconsole
++	// the weapon icons of the status bar: impulse 2 to 8
++	{  0, 152, 24, 24, '2', NULL},
++	{ 24, 152, 24, 24, '3', NULL},
++	{ 48, 152, 24, 24, '4', NULL},
++	{ 72, 152, 24, 24, '5', NULL},
++	{ 96, 152, 24, 24, '6', NULL},
++	{120, 152, 24, 24, '7', NULL},
++	{144, 152, 24, 24, '8', NULL},
++};
++
++#define	NUM_GAMEBUTTONS	(sizeof(gamebuttons) / sizeof(gamebuttons[0]))
++
++// The keyboard with the console, over the status bar: backspace, enter,
++// space and ~ to close the console
++#define	KEYBOARD_X		4
++#define	KEYBOARD_Y		104
++#define	KEY_W			26
++#define	KEY_H			24
++#define	KEYS_PER_ROW	12
++
++static const char *keyrows[] =
++{
++	"1234567890-\b",
++	"qwertyuiop+=",
++	"asdfghjkl;\"\r",
++	"zxcvbnm,./~ ",
++};
++
++#define	NUM_KEYROWS	(sizeof(keyrows) / sizeof(keyrows[0]))
++
++static qboolean	keyboard_shown;
++static char		drawn_state[64];	// what the UI shows, redrawn when it changes
++
++static qboolean IN_KeyboardActive (void)
++{
++	return key_dest == key_console || key_dest == key_message;
++}
++
++// The key of the keyboard at a 2D position, 0 for none
++static int IN_KeyboardKey (int x, int y)
++{
++	int	row, col, c;
++
++	row = (y - KEYBOARD_Y) / KEY_H;
++	col = (x - KEYBOARD_X) / KEY_W;
++	if (y < KEYBOARD_Y || x < KEYBOARD_X || row >= NUM_KEYROWS || col >= KEYS_PER_ROW)
++		return 0;
++	c = keyrows[row][col];
++	switch (c)
++	{
++	case '\b':	return K_BACKSPACE;
++	case '\r':	return K_ENTER;
++	case '~':	return '`';
++	default:	return c;
++	}
++}
++
++// The key under the stylus at a 2D position, 0 when dragging looks around
++static int IN_TouchKey (int x, int y)
++{
++	const touchbutton_t	*b;
++	int					i;
++
++	if (IN_KeyboardActive ())
++		return IN_KeyboardKey (x, y);
++	if (key_dest != key_game)
++		return 0;
++	for (i = 0, b = gamebuttons; i < NUM_GAMEBUTTONS; i++, b++)
++		if (x >= b->x && x < b->x + b->w && y >= b->y && y < b->y + b->h)
++			return b->key;
++	return 0;
++}
++
++static void IN_DrawButton (int x, int y, int w, int h, const char *label, qboolean pressed)
++{
++	Draw_Fill (x + 1, y + 1, w - 2, h - 2, pressed ? 6 : 2);
++	Draw_Fill (x + 1, y + h - 2, w - 2, 1, 0);
++	Draw_String (x + (w - strlen (label) * 8) / 2, y + (h - 8) / 2, (char *) label);
++}
++
++static void IN_DrawKeyboard (void)
++{
++	int		row, col, c, key;
++	char	label[4];
++
++	for (row = 0; row < NUM_KEYROWS; row++)
++		for (col = 0; col < KEYS_PER_ROW; col++)
++		{
++			c = keyrows[row][col];
++			label[0] = c;
++			label[1] = 0;
++			if (c == '\b')
++				strcpy (label, "<-");
++			else if (c == '\r')
++				strcpy (label, "ENT");
++			else if (c == ' ')
++				strcpy (label, "SPC");
++			key = IN_KeyboardKey (KEYBOARD_X + col * KEY_W, KEYBOARD_Y + row * KEY_H);
++			IN_DrawButton (KEYBOARD_X + col * KEY_W, KEYBOARD_Y + row * KEY_H, KEY_W, KEY_H,
++				label, touch_key == key);
++		}
++}
++
++// Kills, secrets and time like the solo scoreboard
++static void IN_StatsString (char *str)
++{
++	int	minutes = cl.time / 60;
++
++	sprintf (str, "KILLS %i/%i  SECRETS %i/%i  %i:%02i", cl.stats[STAT_MONSTERS],
++		cl.stats[STAT_TOTALMONSTERS], cl.stats[STAT_SECRETS], cl.stats[STAT_TOTALSECRETS],
++		minutes, (int) cl.time - 60 * minutes);
++}
++
++/*
++================
++IN_DrawTouchScreen
++
++Called by VID_Update after the 2D drawing of a frame, redraws what changed
++================
++*/
++void IN_DrawTouchScreen (void)
++{
++	const touchbutton_t	*b;
++	char				state[sizeof(drawn_state)], stats[40];
++	int					i, top, bottom;
++	qboolean			overdrawn;
++
++	if (IN_KeyboardActive ())
++	{
++		top = KEYBOARD_Y;
++		bottom = vid.height;
++		sprintf (state, "keyboard %i", touch_key);
++		keyboard_shown = true;
++	}
++	else
++	{
++		if (keyboard_shown)
++		{
++			// the keyboard was over the status bar
++			Sbar_Changed ();
++			keyboard_shown = false;
++		}
++		if (key_dest != key_game || cls.state != ca_connected || scr_con_current || cl.intermission)
++		{
++			VID_BeginUI (0, 0);
++			VID_EndUI ();
++			drawn_state[0] = 0;
++			return;
++		}
++		top = STATS_Y;
++		bottom = vid.height - sb_lines;
++		IN_StatsString (stats);
++		sprintf (state, "game %i %s", touch_key, stats);
++	}
++
++	overdrawn = VID_BeginUI (top, bottom);
++	if (overdrawn || strcmp (state, drawn_state))
++	{
++		strcpy (drawn_state, state);
++		Draw_Fill (0, top, vid.width, bottom - top, 0);
++		if (keyboard_shown)
++			IN_DrawKeyboard ();
++		else
++		{
++			Draw_String ((vid.width - strlen (cl.levelname) * 8) / 2, STATS_Y, cl.levelname);
++			Draw_String ((vid.width - strlen (stats) * 8) / 2, STATS_Y + 12, stats);
++			for (i = 0, b = gamebuttons; i < NUM_GAMEBUTTONS; i++, b++)
++				if (b->label)
++					IN_DrawButton (b->x, b->y, b->w, b->h, b->label, touch_key == b->key);
++		}
++	}
++	VID_EndUI ();
++}
+ 
+ void IN_Init (void)
+ {
+@@ -97,7 +291,14 @@ void Sys_SendKeyEvents (void)
+ 	if (keysHeld () & KEY_TOUCH)
+ 	{
+ 		touchRead (&touch);
+-		if (touching)
++		if (!touching)
++		{
++			// a new touch presses a button or starts dragging, in 2D coordinates
++			touch_key = IN_TouchKey (touch.px * vid.width / 256, touch.py * vid.height / 192);
++			if (touch_key)
++				Key_Event (touch_key, true);
++		}
++		else if (!touch_key)
+ 		{
+ 			mouse_x += touch.px - touch_x;
+ 			mouse_y += touch.py - touch_y;
+@@ -106,8 +307,13 @@ void Sys_SendKeyEvents (void)
+ 		touch_y = touch.py;
+ 		touching = true;
+ 	}
+-	else
++	else if (touching)
++	{
++		if (touch_key)
++			Key_Event (touch_key, false);
++		touch_key = 0;
+ 		touching = false;
++	}
+ }
+ 
+ void IN_Commands (void)
+diff --git a/WinQuake/input.h b/WinQuake/input.h
+index c3daa17..9f82aac 100644
+--- a/WinQuake/input.h
++++ b/WinQuake/input.h
+@@ -27,6 +27,11 @@ void IN_Commands (void);
+ // oportunity for devices to stick commands on the script buffer
+ 
+ void IN_Move (usercmd_t *cmd);
++
++#ifdef __NDS__
++void IN_DrawTouchScreen (void);
++// the touch buttons and keyboard, drawn on top of the 2D drawing
++#endif
+ // add additional movement on top of the keyboard move cmd
+ 
+ void IN_ClearStates (void);
+diff --git a/WinQuake/vid.h b/WinQuake/vid.h
+index 0001882..669205a 100644
+--- a/WinQuake/vid.h
++++ b/WinQuake/vid.h
+@@ -76,6 +76,11 @@ void	VID_Flush3D (void);
+ 
+ void	VID_MarkRows (int y, int height);
+ // the 2D drawing changed these rows, only they are copied to the touch screen
++
++qboolean	VID_BeginUI (int top, int bottom);
++void		VID_EndUI (void);
++// the touch screen UI keeps rows top to bottom out of the view rectangle that
++// is cleared every frame, BeginUI returns true when something else drew there
+ #endif
+ // Called at startup to set up translation tables, takes 256 8 bit RGB values
+ // the palette data will go away after the call, so it must be copied off if
+diff --git a/WinQuake/vid_nds.c b/WinQuake/vid_nds.c
+index d6115a2..35295b8 100644
+--- a/WinQuake/vid_nds.c
++++ b/WinQuake/vid_nds.c
+@@ -61,9 +61,12 @@ static int		smoothing = -1;
+ static byte		screengamma[256];
+ 
+ // Rows changed this frame, to copy to VRAM, and rows drawn this and the last
+-// frame, the view rectangle is cleared where something was drawn before
+-static int		copy_top, copy_bottom;
+-static int		drawn_top, drawn_bottom, olddrawn_top, olddrawn_bottom;
++// frames, the view rectangle is cleared where something was drawn before
++static byte		copyrows[BASEHEIGHT], drawnrows[BASEHEIGHT], olddrawnrows[BASEHEIGHT];
++
++// Rows the touch screen UI keeps, it redraws them when something else drew there
++static int		ui_top, ui_bottom;
++static qboolean	ui_drawing, ui_overdrawn;
+ static byte		vid_buffer[BASEWIDTH * BASEHEIGHT] __attribute__((aligned(32)));
+ 
+ static void VID_VBlank (void)
+@@ -189,27 +192,43 @@ only redraws what changed
+ */
+ void VID_ClearRect (vrect_t *rect)
+ {
+-	int	y, top, bottom;
++	int	y;
+ 
+-	top = max (rect->y, olddrawn_top);
+-	bottom = min (rect->y + rect->height, olddrawn_bottom);
+-	for (y = top; y < bottom; y++)
+-		memset (vid.buffer + y * vid.rowbytes + rect->x, 0, rect->width);
+-	if (top < bottom)
++	for (y = rect->y; y < rect->y + rect->height; y++)
+ 	{
+-		copy_top = min (copy_top, top);
+-		copy_bottom = max (copy_bottom, bottom);
++		if (!olddrawnrows[y] || (y >= ui_top && y < ui_bottom))
++			continue;
++		memset (vid.buffer + y * vid.rowbytes + rect->x, 0, rect->width);
++		olddrawnrows[y] = 0;
++		copyrows[y] = 1;
+ 	}
+-	olddrawn_top = BASEHEIGHT;
+-	olddrawn_bottom = 0;
+ }
+ 
+ void VID_MarkRows (int y, int height)
+ {
++	int	bottom = min (y + height, BASEHEIGHT);
++
+ 	y = max (y, 0);
+-	height = min (y + height, BASEHEIGHT);
+-	copy_top = drawn_top = min (drawn_top, y);
+-	copy_bottom = drawn_bottom = max (drawn_bottom, height);
++	if (!ui_drawing && y < ui_bottom && bottom > ui_top)
++		ui_overdrawn = true;
++	memset (drawnrows + y, 1, max (bottom - y, 0));
++	memset (copyrows + y, 1, max (bottom - y, 0));
++}
++
++qboolean VID_BeginUI (int top, int bottom)
++{
++	qboolean	overdrawn = ui_overdrawn;
++
++	ui_top = top;
++	ui_bottom = bottom;
++	ui_overdrawn = false;
++	ui_drawing = true;
++	return overdrawn;
++}
++
++void VID_EndUI (void)
++{
++	ui_drawing = false;
+ }
+ 
+ /*
+@@ -253,25 +272,23 @@ void VID_Update (vrect_t *rects)
+ 	int	y;
+ 	u32	*src, *dst;
+ 
++	IN_DrawTouchScreen ();
+ 	if (vid_showfps.value)
+ 		VID_DrawFPS ();
+ 
+ 	if (smoothing != (vid_smooth.value != 0))
+ 		VID_SetSmoothing (vid_smooth.value != 0);
+ 
+-	src = (u32 *) (vid.buffer + copy_top * BASEWIDTH);
+-	dst = (u32 *) BG_BMP_RAM_SUB(0) + copy_top * FB_STRIDE / 4;
+-	for (y = copy_top; y < copy_bottom; y++)
++	src = (u32 *) vid.buffer;
++	dst = (u32 *) BG_BMP_RAM_SUB(0);
++	for (y = 0; y < BASEHEIGHT; y++, src += BASEWIDTH / 4, dst += FB_STRIDE / 4)
+ 	{
+-		memcpy (dst, src, BASEWIDTH);
+-		src += BASEWIDTH / 4;
+-		dst += FB_STRIDE / 4;
++		if (copyrows[y])
++			memcpy (dst, src, BASEWIDTH);
++		olddrawnrows[y] |= drawnrows[y];
+ 	}
+-
+-	olddrawn_top = min (olddrawn_top, drawn_top);
+-	olddrawn_bottom = max (olddrawn_bottom, drawn_bottom);
+-	copy_top = drawn_top = BASEHEIGHT;
+-	copy_bottom = drawn_bottom = 0;
++	memset (copyrows, 0, sizeof(copyrows));
++	memset (drawnrows, 0, sizeof(drawnrows));
+ }
+ 
+ /*

@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Builds Quake for the Nintendo DS: fetches id Software's GPL Quake source,
+# applies patches/ and builds build/quake.nds with the game data in assets/
+# embedded.
+#
+# Usage: ./build.sh [command]...
+#   (none)          fetch, patch and build
+#   dev             fetch and patch, then edit and commit in build/<workdir>/
+#   export-patches  write the commits in build/<workdir>/ back to patches/
+#   clean           remove build/
+set -euo pipefail
+cd "$(dirname "$0")"
+
+version='bf4ac424ce754894ac8f1dae6a3981954bc9852d'
+source_url="https://github.com/id-Software/Quake/archive/${version}.tar.gz"
+source_sha256='fb98e8c99740123f3fac830c1387584ec1f684db8908cbf42b7187d06d399013'
+
+# The freely redistributable Quake shareware v1.06 (id1/pak0.pak, episode 1)
+# is embedded by default, from an installed copy on archive.org
+shareware_url='https://archive.org/download/msdos_Quake106_shareware/msdos_Quake106_shareware.zip'
+shareware_sha256='920f4609801d0bdbea5b6738cec49da846df4ff8ce0d46c901ea080dd4437833'
+pak0_sha256='35a9c55e5e5a284a159ad2a62e0e8def23d829561fe2f54eb402dbc0a9a946af'
+
+PORT_DIR="$PWD"
+BUILD_DIR="$PORT_DIR/build"
+ASSETS_DIR="$PORT_DIR/assets"
+SRC_DIR="$BUILD_DIR/Quake-$version"
+
+: "${DEVKITPRO:=/opt/devkitpro}"
+: "${DEVKITARM:=$DEVKITPRO/devkitARM}"
+export DEVKITPRO DEVKITARM
+export PATH="$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH"
+
+msg() { printf '\033[1;34m[quake]\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31m[quake]\033[0m %s\n' "$*" >&2; exit 1; }
+git_src() { git -C "$SRC_DIR" "$@"; }
+
+# Downloads url to dest (unless present) and verifies its sha256
+download() {
+    local url="$1" sha="$2" dest="$3"
+    if [ ! -f "$dest" ]; then
+        msg "Downloading $url"
+        mkdir -p "$(dirname "$dest")"
+        curl -fL --retry 3 -o "$dest.part" "$url"
+        mv "$dest.part" "$dest"
+    fi
+    echo "$sha  $dest" | shasum -a 256 -c --status || { rm -f "$dest"; die "Checksum mismatch for $url"; }
+}
+
+fetch() {
+    local archive="$BUILD_DIR/$(basename "$source_url")"
+    download "$source_url" "$source_sha256" "$archive"
+    if [ ! -d "$SRC_DIR" ]; then
+        msg "Extracting $(basename "$archive")"
+        tar -xf "$archive" -C "$BUILD_DIR"
+    fi
+
+    [ -f "$ASSETS_DIR/id1/pak0.pak" ] && return
+    archive="$BUILD_DIR/$(basename "$shareware_url")"
+    download "$shareware_url" "$shareware_sha256" "$archive"
+    mkdir -p "$ASSETS_DIR/id1"
+    unzip -p "$archive" ID1/PAK0.PAK > "$ASSETS_DIR/id1/pak0.pak"
+    echo "$pak0_sha256  $ASSETS_DIR/id1/pak0.pak" | shasum -a 256 -c --status || die "Unexpected pak0.pak"
+    msg "Added the Quake shareware id1/pak0.pak to assets/"
+}
+
+# Turns the pristine source into a git repo and applies the patches as commits
+patch() {
+    [ -d "$SRC_DIR/.git" ] && return
+    msg "Applying patches"
+    git_src init -q
+    # Deterministic identity so patch commits are reproducible
+    git_src config user.name nds-ports
+    git_src config user.email nds-ports@localhost
+    git_src config commit.gpgsign false
+    git_src add -A -f
+    git_src commit -q -m "Upstream $version"
+    git_src tag upstream
+    if compgen -G "$PORT_DIR/patches/*.patch" > /dev/null; then
+        git_src am -q --keep-cr "$PORT_DIR"/patches/*.patch
+    fi
+}
+
+# Writes the commits on top of upstream back to patches/
+export_patches() {
+    [ -d "$SRC_DIR/.git" ] || die "No patched source tree, run ./build.sh dev first"
+    rm -f "$PORT_DIR"/patches/*.patch
+    git_src format-patch -q --no-numbered --zero-commit --no-signature -o "$PORT_DIR/patches" upstream..HEAD
+    msg "Exported $(git_src rev-list --count upstream..HEAD) patches"
+}
+
+build() {
+    # assets/ is Quake's base directory (id1/, mod directories) and is
+    # embedded into the ROM through NitroFS, with lowercase names like Quake uses
+    local nitro="$BUILD_DIR/nitrofs" file dest
+    rm -rf "$nitro"
+    mkdir -p "$nitro"
+    while IFS= read -r file; do
+        dest="$nitro/$(printf '%s' "$file" | tr '[:upper:]' '[:lower:]')"
+        mkdir -p "$(dirname "$dest")"
+        cp "$ASSETS_DIR/$file" "$dest"
+    done < <(cd "$ASSETS_DIR" && find . -type f ! -name '.*' | sed 's|^\./||')
+    msg "Embedding $(cd "$nitro" && find . -type f | sed 's|^\./||' | tr '\n' ' ')"
+    make -C "$SRC_DIR/WinQuake" -f Makefile.nds -j"$(getconf _NPROCESSORS_ONLN)" \
+        ICON="$PORT_DIR/icon.bmp" NITRO_DIR="$nitro"
+    cp "$SRC_DIR/WinQuake/quake.nds" "$BUILD_DIR/quake.nds"
+    msg "Built build/quake.nds"
+}
+
+[ $# -gt 0 ] || set -- all
+for command in "$@"; do
+    case "$command" in
+        all) mkdir -p "$BUILD_DIR"; fetch; patch; build ;;
+        dev) mkdir -p "$BUILD_DIR"; fetch; patch; msg "Edit and commit in build/Quake-$version/, then run ./build.sh export-patches" ;;
+        export-patches) export_patches ;;
+        clean) rm -rf "$BUILD_DIR" ;;
+        *) die "Unknown command: $command" ;;
+    esac
+done
