@@ -6,10 +6,11 @@ PC games ported to the Nintendo DS (and DSi), built with
 every port fetches a pinned upstream source release and applies patch files on
 top, so the upstream code stays untouched in this repository.
 
-| Port           | Upstream                                                                  | Status   |
-| -------------- | ------------------------------------------------------------------------- | -------- |
-| [DOOM](doom)   | [doomgeneric](https://github.com/ozkl/doomgeneric) (Chocolate Doom based) | Playable |
-| [Quake](quake) | [id Software's Quake](https://github.com/id-Software/Quake) (WinQuake)    | Playable |
+| Port                     | Upstream                                                                  | Status   |
+| ------------------------ | ------------------------------------------------------------------------- | -------- |
+| [DOOM](doom)             | [doomgeneric](https://github.com/ozkl/doomgeneric) (Chocolate Doom based) | Playable |
+| [Quake](quake)           | [id Software's Quake](https://github.com/id-Software/Quake) (WinQuake)    | Playable |
+| [Wolfenstein 3D](wolf3d) | [Wolf4SDL](https://github.com/KS-Presto/Wolf4SDL)                         | Playable |
 
 Every port is a self-contained directory:
 

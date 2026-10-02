@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Thu, 1 Oct 2026 09:12:39 +0200
+Subject: [PATCH] Clip wall posts taller than the view in one step
+
+ScalePost stepped through every pixel below the view to find the texel
+at its bottom edge, which for walls right in front of the player is
+most of the time spent drawing: a wall filling ten times the view
+height stepped through nine view heights per column. The texel and
+step counter are now computed at once, with the same result.
+---
+ wl_draw.c | 14 ++++++++------
+ 1 file changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/wl_draw.c b/wl_draw.c
+index 5dd58a5..1dad953 100644
+--- a/wl_draw.c
++++ b/wl_draw.c
+@@ -322,15 +322,17 @@ void ScalePost (void)
+     yendoffs = centery + ywcount - 1;
+     yw=TEXTURESIZE-1;
+ 
+-    while(yendoffs >= viewheight)
++    // Skip the pixels below the view at once, like stepping through them
++    if(yendoffs >= viewheight)
+     {
+-        ywcount -= TEXTURESIZE/2;
+-        while(ywcount <= 0)
++        ywcount -= TEXTURESIZE/2 * (yendoffs - viewheight + 1);
++        if(ywcount <= 0)
+         {
+-            ywcount += yd;
+-            yw--;
++            int steps = -ywcount / yd + 1;
++            ywcount += steps * yd;
++            yw -= steps;
+         }
+-        yendoffs--;
++        yendoffs = viewheight - 1;
+     }
+     if(yw < 0) return;
+ 

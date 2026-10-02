@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Thu, 1 Oct 2026 09:31:21 +0200
+Subject: [PATCH] Show a message when a savegame can't be written
+
+Saving wrote to the file without checking that it could be created, so
+saving where that is not possible, like in a read-only directory,
+crashed. Quick saves now do nothing then, the menu says so.
+---
+ wl_menu.c | 18 +++++++++++++++---
+ 1 file changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/wl_menu.c b/wl_menu.c
+index d591659..94beadf 100644
+--- a/wl_menu.c
++++ b/wl_menu.c
+@@ -1537,6 +1537,8 @@ CP_SaveGame (int quick)
+ 
+             unlink (savepath);
+             file = fopen (savepath, "wb");
++            if (!file)
++                return 0;
+ 
+             snprintf (input,sizeof(input),"%s",SaveGameNames[which]);
+ 
+@@ -1597,9 +1599,6 @@ CP_SaveGame (int quick)
+                 (LSM_X + LSItems.indent + 2, LSM_Y + which * 13 + 1, input, input, true, 31,
+                  LSM_W - LSItems.indent - 30))
+             {
+-                SaveGamesAvail[which] = 1;
+-                snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
+-
+                 if (configdir[0])
+                     snprintf (savepath, sizeof(savepath), "%s/%s", configdir, name);
+                 else
+@@ -1607,6 +1606,19 @@ CP_SaveGame (int quick)
+ 
+                 unlink (savepath);
+                 file = fopen (savepath, "wb");
++                if (!file)
++                {
++                    SD_PlaySound (NOWAYSND);
++                    Message ("Unable to save the game!");
++                    IN_ClearKeysDown ();
++                    IN_Ack ();
++                    DrawLoadSaveScreen (1);
++                    continue;
++                }
++
++                SaveGamesAvail[which] = 1;
++                snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
++
+                 fwrite (input, 32, 1, file);
+                 fseek (file, 32, SEEK_SET);
+ 

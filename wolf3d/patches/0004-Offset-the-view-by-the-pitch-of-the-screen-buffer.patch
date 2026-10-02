@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Thu, 1 Oct 2026 09:21:08 +0200
+Subject: [PATCH] Offset the view by the pitch of the screen buffer
+
+The view is drawn at screenofs into the screen buffer, whose rows are
+bufferPitch bytes apart, which is not always the screen width: SDL may
+pad the rows of a surface.
+---
+ wl_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/wl_main.c b/wl_main.c
+index 51ae333..b70e109 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -1329,7 +1329,7 @@ boolean SetViewSize (unsigned width, unsigned height)
+     {
+         viewscreenx = (screenWidth-viewwidth) / 2;
+         viewscreeny = (screenHeight-scaleFactor*STATUSLINES-viewheight)/2;
+-        screenofs = viewscreeny*screenWidth+viewscreenx;
++        screenofs = viewscreeny*bufferPitch+viewscreenx;
+     }
+ 
+ //
