@@ -40,7 +40,7 @@ vid_showfps shows the frame rate on the touch screen.
  WinQuake/common.c     |    4 +-
  WinQuake/draw.c       |   15 +
  WinQuake/mathlib.c    |   12 +-
- WinQuake/mem_nds.c    |   83 ++
+ WinQuake/mem_nds.c    |   94 +++
  WinQuake/model.c      |   86 +-
  WinQuake/model.h      |   29 +
  WinQuake/r_light.c    |   11 +
@@ -54,7 +54,7 @@ vid_showfps shows the frame rate on the touch screen.
  WinQuake/sys_nds.c    |   24 +-
  WinQuake/vid.h        |   11 +
  WinQuake/vid_nds.c    |  201 +++--
- 18 files changed, 2314 insertions(+), 93 deletions(-)
+ 18 files changed, 2325 insertions(+), 93 deletions(-)
  create mode 100644 WinQuake/mem_nds.c
  create mode 100644 WinQuake/r_nds.c
 
@@ -230,10 +230,10 @@ index 9f5d644..6047cc6 100644
  
 diff --git a/WinQuake/mem_nds.c b/WinQuake/mem_nds.c
 new file mode 100644
-index 0000000..6125a44
+index 0000000..1703051
 --- /dev/null
 +++ b/WinQuake/mem_nds.c
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,94 @@
 +/*
 +Copyright (C) 1996-1997 Id Software, Inc.
 +
@@ -256,7 +256,8 @@ index 0000000..6125a44
 +// mem_nds.c -- memcpy and memset for the ARM9
 +//
 +// newlib's copy a byte at a time in Thumb mode, these move words, eight at a
-+// time, and run from ITCM. Built without builtins, so the compiler doesn't
++// time, or halfwords when only those line up, and run from ITCM. VRAM ignores
++// byte writes, so copies to it need at least the halfwords. Built without builtins, so the compiler doesn't
 +// turn the loops back into calls to themselves.
 +
 +#include <stddef.h>
@@ -289,6 +290,16 @@ index 0000000..6125a44
 +			*dw++ = *sw++;
 +		d = (uint8_t *) dw;
 +		s = (const uint8_t *) sw;
++	}
++	else if ((((uintptr_t) d ^ (uintptr_t) s) & 1) == 0)
++	{
++		if ((uintptr_t) d & 1 && n)
++		{
++			*d++ = *s++;
++			n--;
++		}
++		for (; n >= 2; n -= 2, d += 2, s += 2)
++			*(uint16_t *) d = *(const uint16_t *) s;
 +	}
 +	while (n--)
 +		*d++ = *s++;
