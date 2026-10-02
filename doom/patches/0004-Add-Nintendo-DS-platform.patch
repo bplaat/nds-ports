@@ -10,6 +10,8 @@ on top of a few engine changes:
   I_Quit returns to the homebrew launcher, I_Error shows the message on
   the touch screen and the startup banner fits the 32 column console.
 - FixedDiv uses the hardware divider, the ARM9 has no divide instruction.
+- Response files work again, doomgeneric left them out, for extra
+  options in /data/doom/args.txt.
 - The 32-bit DG_ScreenBuffer and SDL_mixer are left out, and .gitignore
   no longer hides the doomgeneric/ source directory.
 
@@ -23,25 +25,28 @@ The platform itself:
   own font, a touch bar for weapons, map and zoom, and dragging the stylus
   turns the player.
 - Sound: effects on hardware channels 0-7. MUS and MIDI music drive a
-  wavetable synth on channels 8-15 from a 140 Hz thread.
+  wavetable synth on channels 8-15 from a 140 Hz thread, a song without
+  any delay stops instead of hanging the game.
 - Speed: the column, span, wall and BSP renderer runs from ITCM.
 - Startup: indexes every IWAD and mod (PWAD) in NitroFS and on the SD card
   in a picker that shows each game's title picture, runs mods on a
   matching IWAD, shows a loading screen and keeps config and saves in
-  /data/doom/.
+  /data/doom/, the savegames of a mod apart from its IWAD's.
 ---
  .gitignore                    |    6 +-
  doomgeneric/Makefile.nds      |   77 +++
+ doomgeneric/d_main.c          |   12 +
  doomgeneric/doomgeneric.c     |    2 +
- doomgeneric/doomgeneric_nds.c | 1040 +++++++++++++++++++++++++++++++
+ doomgeneric/doomgeneric_nds.c | 1053 +++++++++++++++++++++++++++++++
  doomgeneric/doomgeneric_nds.h |   25 +
- doomgeneric/i_ndssound.c      | 1107 +++++++++++++++++++++++++++++++++
+ doomgeneric/i_ndssound.c      | 1118 +++++++++++++++++++++++++++++++++
  doomgeneric/i_ndsvideo.c      |  217 +++++++
  doomgeneric/i_sound.c         |    2 +-
  doomgeneric/i_system.c        |   56 +-
+ doomgeneric/m_argv.c          |    3 +-
  doomgeneric/m_config.c        |    7 +
  doomgeneric/m_fixed.c         |    9 +
- 11 files changed, 2541 insertions(+), 7 deletions(-)
+ 13 files changed, 2579 insertions(+), 8 deletions(-)
  create mode 100644 doomgeneric/Makefile.nds
  create mode 100644 doomgeneric/doomgeneric_nds.c
  create mode 100644 doomgeneric/doomgeneric_nds.h
@@ -146,6 +151,29 @@ index 0000000..99e95b9
 +	rm -rf $(BUILD) $(OUTPUT).elf $(OUTPUT).nds $(TARGET).lst
 +
 +-include $(OFILES:.o=.d)
+diff --git a/doomgeneric/d_main.c b/doomgeneric/d_main.c
+index 4014653..4281632 100644
+--- a/doomgeneric/d_main.c
++++ b/doomgeneric/d_main.c
+@@ -1558,6 +1558,18 @@ void D_DoomMain (void)
+         savegamedir = M_GetSaveGameDir(D_SaveGameIWADName(gamemission));
+     }
+ 
++#ifdef __NDS__
++    // A mod keeps its own savegames, they don't load in another game
++    p = M_CheckParmWithArgs("-file", 1);
++    if (p)
++    {
++        char *name = strrchr(myargv[p + 1], '/');
++
++        free(savegamedir);
++        savegamedir = M_GetSaveGameDir(name != NULL ? name + 1 : myargv[p + 1]);
++    }
++#endif
++
+     // Check for -file in shareware
+     if (modifiedgame)
+     {
 diff --git a/doomgeneric/doomgeneric.c b/doomgeneric/doomgeneric.c
 index 881d700..0d110b2 100644
 --- a/doomgeneric/doomgeneric.c
@@ -162,10 +190,10 @@ index 881d700..0d110b2 100644
  
 diff --git a/doomgeneric/doomgeneric_nds.c b/doomgeneric/doomgeneric_nds.c
 new file mode 100644
-index 0000000..9a256f5
+index 0000000..1eee148
 --- /dev/null
 +++ b/doomgeneric/doomgeneric_nds.c
-@@ -0,0 +1,1040 @@
+@@ -0,0 +1,1053 @@
 +//
 +// Nintendo DS platform layer for doomgeneric
 +//
@@ -536,29 +564,33 @@ index 0000000..9a256f5
 +{
 +    consoleClear();
 +    printf("\x1b[31;1m  DOOM\x1b[39;0m for Nintendo %s\n", isDSiMode() ? "DSi" : "DS");
-+    printf("\x1b[30;1m  doomgeneric %s RAM\x1b[39;0m\n", isDSiMode() ? "16 MB" : "4 MB");
 +    printf("\x1b[31m--------------------------------\x1b[39m");
 +}
 +
 +#define LAST_WAD_FILE  DATA_DIR "/last-wad.txt"
-+#define PICKER_ROW     6
++#define PICKER_ROW     5
 +#define PICKER_ROWS    15
 +
++// The game played last time, else the first one that can be played
 +static int LastWad(void)
 +{
 +    char buf[256] = "";
 +    FILE *f = fopen(LAST_WAD_FILE, "r");
 +    int i;
 +
-+    if (f == NULL)
-+        return 0;
-+    if (fgets(buf, sizeof(buf), f) == NULL)
-+        buf[0] = '\0';
-+    fclose(f);
++    if (f != NULL)
++    {
++        if (fgets(buf, sizeof(buf), f) == NULL)
++            buf[0] = '\0';
++        fclose(f);
++    }
 +    for (i = 0; i < num_wads; ++i)
 +        if (strcmp(buf, wads[i].path) == 0 && wads[i].base >= 0)
 +            return i;
-+    return 0;
++    for (i = 0; i < num_wads; ++i)
++        if (wads[i].base >= 0)
++            return i;
++    return -1;
 +}
 +
 +static void SaveLastWad(int index)
@@ -600,7 +632,8 @@ index 0000000..9a256f5
 +    int selected, top = 0, i;
 +
 +    FindWads();
-+    if (num_wads == 0)
++    selected = LastWad();
++    if (selected < 0)
 +    {
 +        PrintHeader();
 +        printf("\n\n\x1b[31;1m  No game data found!\x1b[39;0m\n\n"
@@ -608,7 +641,8 @@ index 0000000..9a256f5
 +               "  tnt.wad or plutonia.wad\n"
 +               "  to /data/doom/ on the SD card,\n"
 +               "  or embed one in the ROM at\n"
-+               "  build time (see README).\n\n"
++               "  build time (see README).\n"
++               "  Mods need one of them too.\n\n"
 +               "  Press START to exit\n");
 +        do
 +        {
@@ -618,10 +652,9 @@ index 0000000..9a256f5
 +        exit(1);
 +    }
 +
-+    selected = LastWad();
 +    ShowTitle(&wads[selected]);
 +    if (num_wads == 1)
-+        return &wads[0];
++        return &wads[selected];
 +
 +    for (;;)
 +    {
@@ -683,8 +716,16 @@ index 0000000..9a256f5
 +// doomgeneric interface
 +// ---------------------------------------------------------------------------
 +
++// The tick counter only counts while a tick task is scheduled
++static void TickNop(TickTask *task)
++{
++}
++
 +void DG_Init(void)
 +{
++    static TickTask tick_task;
++
++    tickTaskStart(&tick_task, TickNop, ticksFromHz(10), ticksFromHz(10));
 +    keysSetRepeat(15, 4);
 +
 +    // Defaults before the config file is loaded
@@ -1239,10 +1280,10 @@ index 0000000..466f88f
 +#endif
 diff --git a/doomgeneric/i_ndssound.c b/doomgeneric/i_ndssound.c
 new file mode 100644
-index 0000000..0c949e3
+index 0000000..3f12045
 --- /dev/null
 +++ b/doomgeneric/i_ndssound.c
-@@ -0,0 +1,1107 @@
+@@ -0,0 +1,1118 @@
 +//
 +// Nintendo DS sound backend
 +//
@@ -1424,10 +1465,12 @@ index 0000000..0c949e3
 +    if (channel < 0 || channel >= NUM_SFX_CHANNELS)
 +        return -1;
 +
-+    ReleaseChannel(channel);
++    // The old sample plays until the channel restarts, it may not be
++    // purged to make room for the new one
 +    sample = CacheSfx(sfx);
 +    if (sample == NULL)
 +        return -1;
++    ReleaseChannel(channel);
 +
 +    // Keep the sample resident while the ARM7 is reading it
 +    Z_ChangeTag(sample, PU_STATIC);
@@ -1957,6 +2000,8 @@ index 0000000..0c949e3
 +
 +static void MusicTick(void)
 +{
++    boolean restarted = false;
++
 +    if (!song_playing || song_paused)
 +        return;
 +
@@ -1964,7 +2009,8 @@ index 0000000..0c949e3
 +    {
 +        if (!ProcessEvents())
 +        {
-+            if (!song_looping)
++            // A looping song without any delay would never let the game run
++            if (!song_looping || restarted)
 +            {
 +                song_playing = false;
 +                AllNotesOff();
@@ -1972,6 +2018,7 @@ index 0000000..0c949e3
 +            }
 +            song_pos = song;
 +            song_delay = 0;
++            restarted = true;
 +        }
 +    }
 +    --song_delay;
@@ -2195,7 +2242,9 @@ index 0000000..0c949e3
 +        }
 +        else if (status == 0xf0 || status == 0xf7)
 +        {
-+            t->pos += ReadVarLen(&t->pos, t->end);
++            uint32_t size = ReadVarLen(&t->pos, t->end);
++
++            t->pos += size;
 +        }
 +        else if (status & 0x80)
 +        {
@@ -2261,13 +2310,16 @@ index 0000000..0c949e3
 +{
 +    const mus_header_t *header = data;
 +    song_t *handle = Z_Malloc(sizeof(song_t), PU_STATIC, NULL);
++    // Unsigned, the scores of eg. E1M2 are longer than 32 KiB
++    int score_start = (uint16_t) SHORT(header->score_start);
++    int score_len = (uint16_t) SHORT(header->score_len);
 +
 +    handle->converted = NULL;
 +    if (len >= (int) sizeof(mus_header_t) && memcmp(header->header, "MUS\x1a", 4) == 0
-+     && SHORT(header->score_start) + SHORT(header->score_len) <= len)
++     && score_start + score_len <= len)
 +    {
-+        handle->score = (const byte *) data + SHORT(header->score_start);
-+        handle->len = SHORT(header->score_len);
++        handle->score = (const byte *) data + score_start;
++        handle->len = score_len;
 +    }
 +    else if ((handle->converted = ConvertMidi(data, len, &handle->len)) != NULL)
 +    {
@@ -2723,6 +2775,20 @@ index 53ab2c9..b1f8759 100644
  
  #else
      {
+diff --git a/doomgeneric/m_argv.c b/doomgeneric/m_argv.c
+index 1582450..9796bd5 100644
+--- a/doomgeneric/m_argv.c
++++ b/doomgeneric/m_argv.c
+@@ -74,7 +74,8 @@ int M_CheckParm(char *check)
+ 
+ static void LoadResponseFile(int argv_index)
+ {
+-#if ORIGCODE
++    // The Nintendo DS reads extra options from a response file
++#if ORIGCODE || defined(__NDS__)
+     FILE *handle;
+     int size;
+     char *infile;
 diff --git a/doomgeneric/m_config.c b/doomgeneric/m_config.c
 index 588b64d..1e44f06 100644
 --- a/doomgeneric/m_config.c
