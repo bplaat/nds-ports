@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Builds DOOM for the Nintendo DS: fetches doomgeneric, applies patches/ and
-# builds build/doom.nds with the WADs from assets/ embedded.
+# builds target/doom.nds with the WADs from assets/ embedded.
 #
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
-#   dev             fetch and patch, then edit and commit in build/<workdir>/
-#   export-patches  write the commits in build/<workdir>/ back to patches/
-#   clean           remove build/
+#   dev             fetch and patch, then edit and commit in target/<workdir>/
+#   export-patches  write the commits in target/<workdir>/ back to patches/
+#   clean           remove target/
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -21,7 +21,7 @@ shareware_sha256='e02c8b5e01be7373d4c53f82556118e2aaaf8f83fa2af5eee1efadf9c55c4e
 doom1_sha256='1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771'
 
 PORT_DIR="$PWD"
-BUILD_DIR="$PORT_DIR/build"
+BUILD_DIR="$PORT_DIR/target"
 ASSETS_DIR="$PORT_DIR/assets"
 SRC_DIR="$BUILD_DIR/doomgeneric-$version"
 
@@ -98,14 +98,14 @@ build() {
     make -C "$SRC_DIR/doomgeneric" -f Makefile.nds -j"$(getconf _NPROCESSORS_ONLN)" \
         ICON="$PORT_DIR/icon.bmp" NITRO_DIR="$nitro"
     cp "$SRC_DIR/doomgeneric/doom.nds" "$BUILD_DIR/doom.nds"
-    msg "Built build/doom.nds"
+    msg "Built target/doom.nds"
 }
 
 [ $# -gt 0 ] || set -- all
 for command in "$@"; do
     case "$command" in
         all) mkdir -p "$BUILD_DIR"; fetch; patch; build ;;
-        dev) mkdir -p "$BUILD_DIR"; fetch; patch; msg "Edit and commit in build/doomgeneric-$version/, then run ./build.sh export-patches" ;;
+        dev) mkdir -p "$BUILD_DIR"; fetch; patch; msg "Edit and commit in target/doomgeneric-$version/, then run ./build.sh export-patches" ;;
         export-patches) export_patches ;;
         clean) rm -rf "$BUILD_DIR" ;;
         *) die "Unknown command: $command" ;;

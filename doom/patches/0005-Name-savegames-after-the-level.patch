@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Sat, 3 Oct 2026 11:04:39 +0200
+Subject: [PATCH] Name savegames after the level
+
+Savegames are named after the level, eg. "E1M3: Toxin Refinery",
+without asking for a name, there is no keyboard to type one.
+---
+ doomgeneric/m_menu.c | 11 +++--------
+ 1 file changed, 3 insertions(+), 8 deletions(-)
+
+diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
+index 356fe5a..7de81eb 100644
+--- a/doomgeneric/m_menu.c
++++ b/doomgeneric/m_menu.c
+@@ -634,14 +634,9 @@ void M_DoSave(int slot)
+ //
+ void M_SaveSelect(int choice)
+ {
+-    // we are going to be intercepting all chars
+-    saveStringEnter = 1;
+-    
+-    saveSlot = choice;
+-    M_StringCopy(saveOldString,savegamestrings[choice], SAVESTRINGSIZE);
+-    if (!strcmp(savegamestrings[choice], EMPTYSTRING))
+-	savegamestrings[choice][0] = 0;
+-    saveCharIndex = strlen(savegamestrings[choice]);
++    // Without a keyboard to type a name, saves are named after the level
++    M_StringCopy(savegamestrings[choice], HU_LevelTitle(), SAVESTRINGSIZE);
++    M_DoSave(choice);
+ }
+ 
+ //

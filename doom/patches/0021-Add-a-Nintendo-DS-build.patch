@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Sat, 3 Oct 2026 11:04:44 +0200
+Subject: [PATCH] Add a Nintendo DS build
+
+Makefile.nds builds a DSi enhanced .nds with devkitARM and libnds/calico.
+The renderer, sight checks, fixed point math and memcpy/memset run from
+ITCM as ARM code, the rest is Thumb code in main RAM. The 32-bit
+DG_ScreenBuffer and SDL_mixer are left out, and .gitignore no longer
+hides the doomgeneric/ source directory.
+---
+ .gitignore                |  6 ++-
+ doomgeneric/Makefile.nds  | 80 +++++++++++++++++++++++++++++++++++++++
+ doomgeneric/doomgeneric.c |  2 -
+ doomgeneric/i_sound.c     |  4 --
+ 4 files changed, 85 insertions(+), 7 deletions(-)
+ create mode 100644 doomgeneric/Makefile.nds
+
+diff --git a/.gitignore b/.gitignore
+index 4ac2545..4a77b25 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -9,5 +9,9 @@
+ Debug/
+ Release/
+ Build/
+-doomgeneric
++/doomgeneric/doomgeneric
++/doomgeneric/build/
++/doomgeneric/doom.elf
++/doomgeneric/doom.nds
++/doomgeneric/doom.lst
+ doomgeneric.map
+diff --git a/doomgeneric/Makefile.nds b/doomgeneric/Makefile.nds
+new file mode 100644
+index 0000000..ae18a7c
+--- /dev/null
++++ b/doomgeneric/Makefile.nds
+@@ -0,0 +1,80 @@
++#---------------------------------------------------------------------------------
++# Nintendo DS (devkitARM + libnds) build of doomgeneric
++#   make -f Makefile.nds [ICON=icon.bmp] [NITRO_DIR=dir]
++#---------------------------------------------------------------------------------
++ifeq ($(strip $(DEVKITARM)),)
++$(error "Please set DEVKITARM in your environment. export DEVKITARM=<path to>devkitARM")
++endif
++
++GAME_TITLE     := DOOM
++GAME_SUBTITLE1 := id Software (1993)
++GAME_SUBTITLE2 := doomgeneric NDS port
++
++TARGET  := doom
++BUILD   := build
++OUTPUT  := $(CURDIR)/$(TARGET)
++
++ICON      ?=
++NITRO_DIR ?=
++GAME_ICON := $(or $(ICON),$(DEVKITPRO)/calico/share/nds-icon.bmp)
++ifneq ($(strip $(NITRO_DIR)),)
++NITRO_FILES := $(NITRO_DIR)
++endif
++
++# Must be set before ds_rules, which prepends the calico library path
++LIBPATHS := -L$(DEVKITPRO)/libnds/lib
++
++include $(DEVKITARM)/ds_rules
++
++SRC_DOOM := dummy am_map doomdef doomstat dstrings d_event d_items d_iwad d_loop d_main d_mode d_net \
++	f_finale f_wipe g_game hu_lib hu_stuff info i_cdmus i_endoom i_joystick i_scale i_sound \
++	i_system i_timer memio m_argv m_bbox m_cheat m_config m_controls m_menu m_misc m_random p_ceilng \
++	p_doors p_enemy p_floor p_inter p_lights p_map p_maputl p_mobj p_plats p_pspr p_saveg p_setup \
++	p_spec p_switch p_telept p_tick p_user r_data r_sky sha1 \
++	sounds statdump st_lib st_stuff s_sound tables v_video wi_stuff w_checksum w_file w_main w_wad \
++	z_zone w_file_stdc doomgeneric doomgeneric_nds i_ndsvideo i_ndsinput i_ndstouch \
++	i_ndssound i_ndsmusic
++
++# Hot code (the renderer, sight checks, fixed point math) and memcpy/memset
++# run from ITCM, other hot functions are marked HOT_CODE
++SRC_ITCM := r_draw r_plane r_segs r_bsp r_main r_things p_sight m_fixed mem_nds
++
++OFILES := $(addprefix $(BUILD)/,$(addsuffix .o,$(SRC_DOOM)) $(addsuffix .itcm.o,$(SRC_ITCM)))
++
++ARCH     := -march=armv5te -mtune=arm946e-s -mthumb
++CFLAGS   := -g -O2 -Wall -Wno-unused -Wno-pointer-sign -Wno-format-truncation -Wno-dangling-pointer \
++	-ffunction-sections -fdata-sections -fno-strict-aliasing $(ARCH) \
++	-DARM9 -DNORMALUNIX -DLINUX -DFEATURE_SOUND -DCMAP256 \
++	-I$(LIBNDS)/include -I$(CALICO)/include
++LDFLAGS  := -specs=ds_arm9.specs -g $(ARCH) -Wl,-Map,$(BUILD)/$(TARGET).map
++LIBS     := -lfat -lnds9 -lm
++LD       := $(CC)
++
++.PHONY: all clean
++all: $(OUTPUT).nds
++
++# Like the ds_rules default, plus a proper header title (homebrew game code kept)
++$(OUTPUT).nds: $(OUTPUT).elf $(GAME_ICON) $(wildcard $(NITRO_DIR)/*)
++	$(SILENTCMD)ndstool -c $@ -9 $< $(_ARM7_ELF) -b $(GAME_ICON) "$(GAME_TITLE);$(GAME_SUBTITLE1);$(GAME_SUBTITLE2)" \
++		-g "####" 00 "$(GAME_TITLE)" $(_ADDFILES)
++	$(SILENTMSG) built ... $(notdir $@)
++
++$(OUTPUT).elf: $(OFILES)
++
++$(BUILD)/%.itcm.o: CFLAGS += -marm -mlong-calls
++$(BUILD)/mem_nds.itcm.o: CFLAGS += -fno-builtin -fno-tree-loop-distribute-patterns
++$(BUILD)/%.itcm.o: %.c | $(BUILD)
++	$(SILENTMSG) $(notdir $<)
++	$(SILENTCMD)$(CC) -MMD -MP $(_EXTRADEFS) $(CFLAGS) -c $< -o $@
++
++$(BUILD)/%.o: %.c | $(BUILD)
++	$(SILENTMSG) $(notdir $<)
++	$(SILENTCMD)$(CC) -MMD -MP $(_EXTRADEFS) $(CFLAGS) -c $< -o $@
++
++$(BUILD):
++	@mkdir -p $@
++
++clean:
++	rm -rf $(BUILD) $(OUTPUT).elf $(OUTPUT).nds $(TARGET).lst
++
++-include $(OFILES:.o=.d)
+diff --git a/doomgeneric/doomgeneric.c b/doomgeneric/doomgeneric.c
+index 881d700..98591e3 100644
+--- a/doomgeneric/doomgeneric.c
++++ b/doomgeneric/doomgeneric.c
+@@ -18,8 +18,6 @@ void doomgeneric_Create(int argc, char **argv)
+ 
+ 	M_FindResponseFile();
+ 
+-	DG_ScreenBuffer = malloc(DOOMGENERIC_RESX * DOOMGENERIC_RESY * 4);
+-
+ 	DG_Init();
+ 
+ 	D_DoomMain ();
+diff --git a/doomgeneric/i_sound.c b/doomgeneric/i_sound.c
+index c80a9d1..a90cd3d 100644
+--- a/doomgeneric/i_sound.c
++++ b/doomgeneric/i_sound.c
+@@ -18,10 +18,6 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ 
+-#if defined(FEATURE_SOUND) && !defined(__DJGPP__)
+-#include <SDL_mixer.h>
+-#endif
+-
+ #include "config.h"
+ #include "doomfeatures.h"
+ #include "doomtype.h"

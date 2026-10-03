@@ -17,17 +17,17 @@ Every port is a self-contained directory:
 | Path        | Contents                                                    |
 | ----------- | ----------------------------------------------------------- |
 | `README.md` | Game data, controls and how the port works                  |
-| `build.sh`  | Fetches, patches and builds `build/<port>.nds`              |
+| `build.sh`  | Fetches, patches and builds `target/<port>.nds`             |
 | `icon.bmp`  | The 32x32 icon shown in DS menus                            |
 | `patches/`  | The patch series on top of upstream                         |
 | `assets/`   | Game data embedded in the ROM (gitignored, never commit it) |
-| `build/`    | Sources, work files and the resulting ROM (gitignored)      |
+| `target/`   | Sources, work files and the resulting ROM (gitignored)      |
 
 To build a port, install devkitPro with the `nds-dev` group and run its
 `build.sh`, for example `doom/build.sh`.
 
 To change a port, run `./build.sh dev`, edit and commit in the patched source
-tree in `build/`, then `./build.sh export-patches` writes the commits back to
+tree in `target/`, then `./build.sh export-patches` writes the commits back to
 `patches/`.
 
 In melonDS, disable the JIT recompiler (Config > Emu settings > CPU): its
