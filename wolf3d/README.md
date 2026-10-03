@@ -4,10 +4,10 @@ A port of [Wolf4SDL](https://github.com/KS-Presto/Wolf4SDL), the portable
 source port of id Software's Wolfenstein 3D, to the Nintendo DS and DSi.
 
 ```sh
-./build.sh                  # fetch, patch and build build/wolf3d.nds
-./build.sh dev              # fetch and patch, then edit and commit in build/Wolf4SDL-*/
+./build.sh                  # fetch, patch and build target/wolf3d.nds
+./build.sh dev              # fetch and patch, then edit and commit in target/Wolf4SDL-*/
 ./build.sh export-patches   # write those commits back to patches/
-./build.sh clean            # remove build/
+./build.sh clean            # remove target/
 ```
 
 ## Game data

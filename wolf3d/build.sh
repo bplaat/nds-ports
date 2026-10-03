@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Builds Wolfenstein 3D for the Nintendo DS: fetches Wolf4SDL, applies
-# patches/ and builds build/wolf3d.nds with the game data in assets/ embedded.
+# patches/ and builds target/wolf3d.nds with the game data in assets/ embedded.
 #
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
-#   dev             fetch and patch, then edit and commit in build/<workdir>/
-#   export-patches  write the commits in build/<workdir>/ back to patches/
-#   clean           remove build/
+#   dev             fetch and patch, then edit and commit in target/<workdir>/
+#   export-patches  write the commits in target/<workdir>/ back to patches/
+#   clean           remove target/
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -29,7 +29,7 @@ f4cc800dc8444373092d4eaa5d6ab59d63d23a510a9d38b73ca9b3dbb700d18b  vgahead.wl1
 698f217257e2cbb951a4d110ba09140291f38d0121b3784d1d6be59c03a6b47b  vswap.wl1'
 
 PORT_DIR="$PWD"
-BUILD_DIR="$PORT_DIR/build"
+BUILD_DIR="$PORT_DIR/target"
 ASSETS_DIR="$PORT_DIR/assets"
 SRC_DIR="$BUILD_DIR/Wolf4SDL-$version"
 
@@ -114,14 +114,14 @@ build() {
     make -C "$SRC_DIR" -f Makefile.nds -j"$(getconf _NPROCESSORS_ONLN)" \
         ICON="$PORT_DIR/icon.bmp" NITRO_DIR="$nitro"
     cp "$SRC_DIR/wolf3d.nds" "$BUILD_DIR/wolf3d.nds"
-    msg "Built build/wolf3d.nds"
+    msg "Built target/wolf3d.nds"
 }
 
 [ $# -gt 0 ] || set -- all
 for command in "$@"; do
     case "$command" in
         all) mkdir -p "$BUILD_DIR"; fetch; patch; build ;;
-        dev) mkdir -p "$BUILD_DIR"; fetch; patch; msg "Edit and commit in build/Wolf4SDL-$version/, then run ./build.sh export-patches" ;;
+        dev) mkdir -p "$BUILD_DIR"; fetch; patch; msg "Edit and commit in target/Wolf4SDL-$version/, then run ./build.sh export-patches" ;;
         export-patches) export_patches ;;
         clean) rm -rf "$BUILD_DIR" ;;
         *) die "Unknown command: $command" ;;
