@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Builds Quake for the Nintendo DS: fetches id Software's GPL Quake source,
-# applies patches/ and builds build/quake.nds with the game data in assets/
+# applies patches/ and builds target/quake.nds with the game data in assets/
 # embedded.
 #
 # Usage: ./build.sh [command]...
 #   (none)          fetch, patch and build
-#   dev             fetch and patch, then edit and commit in build/<workdir>/
-#   export-patches  write the commits in build/<workdir>/ back to patches/
-#   clean           remove build/
+#   dev             fetch and patch, then edit and commit in target/<workdir>/
+#   export-patches  write the commits in target/<workdir>/ back to patches/
+#   clean           remove target/
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -22,7 +22,7 @@ shareware_sha256='920f4609801d0bdbea5b6738cec49da846df4ff8ce0d46c901ea080dd44378
 pak0_sha256='35a9c55e5e5a284a159ad2a62e0e8def23d829561fe2f54eb402dbc0a9a946af'
 
 PORT_DIR="$PWD"
-BUILD_DIR="$PORT_DIR/build"
+BUILD_DIR="$PORT_DIR/target"
 ASSETS_DIR="$PORT_DIR/assets"
 SRC_DIR="$BUILD_DIR/Quake-$version"
 
@@ -104,14 +104,14 @@ build() {
     make -C "$SRC_DIR/WinQuake" -f Makefile.nds -j"$(getconf _NPROCESSORS_ONLN)" \
         ICON="$PORT_DIR/icon.bmp" NITRO_DIR="$nitro"
     cp "$SRC_DIR/WinQuake/quake.nds" "$BUILD_DIR/quake.nds"
-    msg "Built build/quake.nds"
+    msg "Built target/quake.nds"
 }
 
 [ $# -gt 0 ] || set -- all
 for command in "$@"; do
     case "$command" in
         all) mkdir -p "$BUILD_DIR"; fetch; patch; build ;;
-        dev) mkdir -p "$BUILD_DIR"; fetch; patch; msg "Edit and commit in build/Quake-$version/, then run ./build.sh export-patches" ;;
+        dev) mkdir -p "$BUILD_DIR"; fetch; patch; msg "Edit and commit in target/Quake-$version/, then run ./build.sh export-patches" ;;
         export-patches) export_patches ;;
         clean) rm -rf "$BUILD_DIR" ;;
         *) die "Unknown command: $command" ;;

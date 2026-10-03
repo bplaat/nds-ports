@@ -4,10 +4,10 @@ A port of id Software's [GPL Quake source](https://github.com/id-Software/Quake)
 (WinQuake) to the Nintendo DS and DSi, rendered by the DS 3D hardware.
 
 ```sh
-./build.sh                  # fetch, patch and build build/quake.nds
-./build.sh dev              # fetch and patch, then edit and commit in build/Quake-*/
+./build.sh                  # fetch, patch and build target/quake.nds
+./build.sh dev              # fetch and patch, then edit and commit in target/Quake-*/
 ./build.sh export-patches   # write those commits back to patches/
-./build.sh clean            # remove build/
+./build.sh clean            # remove target/
 ```
 
 ## Game data
