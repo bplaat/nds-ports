@@ -3,30 +3,30 @@ From: nds-ports <nds-ports@localhost>
 Date: Sat, 3 Oct 2026 11:04:45 +0200
 Subject: [PATCH] Add the DS game picker
 
-Indexes every IWAD and mod (PWAD) in NitroFS and on the SD card in a
-picker on the bottom screen console that shows each game's title
-picture, runs mods on a matching IWAD, shows a loading screen and keeps
-config and saves in /data/doom/. A title picture is only drawn when it
-is a patch with all of its columns inside the lump, picker lines are cut
-to one row so a tap picks the game it is on. The picker sleeps while the
-lid is closed and exits on the DSi power button or L+R+START+SELECT.
-Doom then runs in a thread with a 64 KiB stack in main RAM: DTCM is
-mostly taken by the light tables, and Doom's deepest recursion grows
-with the size of a map. Also the doomgeneric interface: timing from the
-calico tick counter.
+Switches the ARM9 to 134 MHz in DSi mode, then indexes every IWAD and
+mod (PWAD) in NitroFS and on the SD card in a picker on the bottom
+screen console that shows each game's title picture, runs mods on a
+matching IWAD, shows a loading screen and keeps config and saves in
+/data/doom/. A title picture is only drawn when it is a patch with all
+of its columns inside the lump, picker lines are cut to one row so a tap
+picks the game it is on. The picker sleeps while the lid is closed and
+exits on the DSi power button or L+R+START+SELECT. Doom then runs in a
+thread with a 64 KiB stack in main RAM: DTCM is mostly taken by the
+light tables, and Doom's deepest recursion grows with the size of a map.
+Also the doomgeneric interface: timing from the calico tick counter.
 ---
- doomgeneric/doomgeneric_nds.c | 640 ++++++++++++++++++++++++++++++++++
+ doomgeneric/doomgeneric_nds.c | 644 ++++++++++++++++++++++++++++++++++
  doomgeneric/doomgeneric_nds.h |  31 ++
- 2 files changed, 671 insertions(+)
+ 2 files changed, 675 insertions(+)
  create mode 100644 doomgeneric/doomgeneric_nds.c
  create mode 100644 doomgeneric/doomgeneric_nds.h
 
 diff --git a/doomgeneric/doomgeneric_nds.c b/doomgeneric/doomgeneric_nds.c
 new file mode 100644
-index 0000000..cd25282
+index 0000000..522ea23
 --- /dev/null
 +++ b/doomgeneric/doomgeneric_nds.c
-@@ -0,0 +1,640 @@
+@@ -0,0 +1,644 @@
 +//
 +// Nintendo DS platform layer for doomgeneric
 +//
@@ -631,6 +631,10 @@ index 0000000..cd25282
 +{
 +    static Thread doom_thread;
 +    const wad_entry_t *wad;
++
++    // In DSi mode the ARM9 runs at twice the speed of the DS
++    if (isDSiMode())
++        setCpuClock(true);
 +
 +    I_NDS_InitVideo();
 +    ConsoleMode();

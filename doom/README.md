@@ -173,11 +173,11 @@ of main RAM on a 16-bit bus at half its clock.
   math and `memcpy`/`memset` run from ITCM as ARM code, which is nearly full,
   the rest is Thumb code in main RAM.
 - [0022](patches/0022-Add-the-DS-game-picker.patch): `doomgeneric_nds.c`
-  finds every IWAD and mod in NitroFS and on the SD card, shows them in a
-  picker with each game's title picture, shows a loading screen and keeps
-  config and saves in `/data/doom/`. Doom runs in a thread with its stack in
-  main RAM, DTCM mostly holds the colormaps. Also the doomgeneric timing
-  interface.
+  switches the ARM9 to 134 MHz in DSi mode, finds every IWAD and mod in
+  NitroFS and on the SD card, shows them in a picker with each game's title
+  picture, shows a loading screen and keeps config and saves in
+  `/data/doom/`. Doom runs in a thread with its stack in main RAM, DTCM
+  mostly holds the colormaps. Also the doomgeneric timing interface.
 - [0023](patches/0023-Keep-the-savegames-of-a-mod-apart-from-its-IWAD-s.patch):
   A mod gets its own savegame directory.
 - [0024](patches/0024-Fit-the-system-layer-to-the-DS.patch): The zone
