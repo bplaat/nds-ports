@@ -1,41 +1,27 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: nds-ports <nds-ports@localhost>
-Date: Thu, 1 Oct 2026 08:47:08 +0200
+Date: Sun, 4 Oct 2026 12:18:32 +0200
 Subject: [PATCH] Run the shareware and GT data in Apogee v1.4 builds
 
 The Apogee v1.4 graphics layout is a superset of the others: the GT, id
 and Activision v1.4 data (also the one sold today) lacks twelve "Read
 This!" pictures and the shareware the end texts of episodes 2 to 6.
 Their chunks are now marked missing when the header is shorter, so one
-build plays all three. The "Read This!" menu item is grayed out and the
-help screens are skipped for the GT data.
-
-The shareware also lacks the digitized sounds of the other episodes,
-those stay AdLib sounds, and the notice that the game is not shareware
-is not shown for it.
+build plays all of them. The pictable only covers the pictures the data
+has, the ones after the missing pictures move to their place.
 ---
- id_ca.c   | 67 +++++++++++++++++++++++++++++++++++++++++++++++++------
- id_ca.h   |  2 ++
- id_sd.c   |  9 ++++++--
- id_sd.h   |  2 +-
- wl_main.c |  6 +++--
- wl_menu.c | 10 +++++++++
- wl_text.c |  2 ++
- 7 files changed, 86 insertions(+), 12 deletions(-)
+ id_ca.c | 53 ++++++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 46 insertions(+), 7 deletions(-)
 
 diff --git a/id_ca.c b/id_ca.c
-index e81502b..19d3037 100644
+index e81502b..bcde0e2 100644
 --- a/id_ca.c
 +++ b/id_ca.c
-@@ -87,6 +87,23 @@ static const char aheadname[] = "audiohed.";
+@@ -87,6 +87,17 @@ static const char aheadname[] = "audiohed.";
  static const char afilename[] = "audiot.";
  
  static int32_t  grstarts[NUMCHUNKS + 1];
 +
-+boolean gtgraphics;
-+
-+#if !defined(SPEAR) && !defined(JAPAN) && !defined(GOODTIMES) && !defined(UPLOAD) \
-+    && !defined(APOGEE_1_0) && !defined(APOGEE_1_1) && !defined(APOGEE_1_2)
 +//
 +// The Apogee v1.4 graphics layout fits more data: the GT, id and Activision
 +// v1.4 data (also the one sold today) lacks these "Read This!" pictures, the
@@ -46,24 +32,18 @@ index e81502b..19d3037 100644
 +    H_KEYBOARDPIC, H_JOYPIC, H_HEALPIC, H_TREASUREPIC, H_GUNPIC, H_KEYPIC,
 +    H_WEAPON1234PIC, H_WOLFLOGOPIC, H_VISAPIC, H_MCPIC, H_IDLOGOPIC, H_SPEARADPIC
 +};
-+#define LAYOUT_FITS_GT_AND_SHAREWARE
-+#endif
  static int32_t* audiostarts; // array of offsets in audio / audiot
  
  #ifdef GRHEADERLINKED
-@@ -471,24 +488,42 @@ void CAL_SetupGrFile (void)
+@@ -471,24 +482,36 @@ void CAL_SetupGrFile (void)
      fseek (file,0,SEEK_SET);
  
  	int expectedsize = lengthof(grstarts);
 +    int numstarts = headersize / 3;
  
 -    if(!param_ignorenumchunks && headersize / 3 != expectedsize)
-+#ifdef LAYOUT_FITS_GT_AND_SHAREWARE
-+    gtgraphics = numstarts == expectedsize - (int) lengthof(gtmissing);
++    boolean gtgraphics = numstarts == expectedsize - (int) lengthof(gtmissing);
 +    if(numstarts > expectedsize || (numstarts < expectedsize && !gtgraphics && numstarts <= T_ENDART1 + 1))
-+#else
-+    if(!param_ignorenumchunks && numstarts != expectedsize)
-+#endif
          Quit("Wolf4SDL was not compiled for these data files:\n"
              "%s contains a wrong number of offsets (%i instead of %i)!\n\n"
              "Please check whether you are using the right executable!\n"
@@ -84,7 +64,6 @@ index e81502b..19d3037 100644
 +    int chunk, missing = 0;
 +    for (chunk = 0; chunk < expectedsize; chunk++)
      {
-+#ifdef LAYOUT_FITS_GT_AND_SHAREWARE
 +        // Missing chunks are sparse, the end of the file stays last
 +        if ((gtgraphics && missing < (int) lengthof(gtmissing) && chunk == gtmissing[missing])
 +            || (!gtgraphics && chunk >= numstarts - 1 && chunk < expectedsize - 1))
@@ -93,14 +72,13 @@ index e81502b..19d3037 100644
 +            missing++;
 +            continue;
 +        }
-+#endif
          int32_t val = d[0] | (d[1] << 8) | (d[2] << 16);
 -        *i = (val == 0x00FFFFFF ? -1 : val);
 +        grstarts[chunk] = (val == 0x00FFFFFF ? -1 : val);
          d += 3;
      }
  
-@@ -509,9 +544,27 @@ void CAL_SetupGrFile (void)
+@@ -509,9 +532,25 @@ void CAL_SetupGrFile (void)
      CAL_GetGrChunkLength (file,STRUCTPIC);                // position file pointer
      compseg = SafeMalloc(chunkcomplen);
      fread (compseg,chunkcomplen,1,file);
@@ -108,7 +86,6 @@ index e81502b..19d3037 100644
 +    CAL_HuffExpand(compseg, (byte*)pictable, MIN(chunkexplen, NUMPICS * (int32_t) sizeof(*pictable)), grhuffman);
      free(compseg);
  
-+#ifdef LAYOUT_FITS_GT_AND_SHAREWARE
 +    // Move the pictures after the missing ones to their place
 +    if (gtgraphics)
 +    {
@@ -124,132 +101,7 @@ index e81502b..19d3037 100644
 +                pictable[pic] = pictable[src--];
 +        }
 +    }
-+#endif
 +
      CA_CacheGrChunks (file);
  
      fclose (file);
-diff --git a/id_ca.h b/id_ca.h
-index 2e25fb4..b8e164c 100644
---- a/id_ca.h
-+++ b/id_ca.h
-@@ -25,6 +25,8 @@ extern  maptype *mapheaderseg[NUMMAPS];
- extern  byte    *audiosegs[NUMSNDCHUNKS];
- extern  byte    *grsegs[NUMCHUNKS];
- 
-+extern  boolean gtgraphics;     // GT/id/Activision data in an Apogee build, without the "Read This!" pages
-+
- extern  char  extension[5];
- extern  char  graphext[5];
- extern  char  audioext[5];
-diff --git a/id_sd.c b/id_sd.c
-index 1bd9163..5ea7ec6 100644
---- a/id_sd.c
-+++ b/id_sd.c
-@@ -404,19 +404,23 @@ Sint16 GetSample(float csample, byte *samples, int size)
-     return (Sint16) intval;
- }
- 
--void SD_PrepareSound(int which)
-+boolean SD_PrepareSound(int which)
- {
-     int i;
- 
-     if(DigiList == NULL)
-         Quit("SD_PrepareSound(%i): DigiList not initialized!\n", which);
- 
-+    // The shareware lacks the sounds of the other episodes
-+    if(which >= NumDigi)
-+        return false;
-+
-     int page = DigiList[which].startpage;
-     int size = DigiList[which].length;
- 
-     byte *origsamples = PM_GetSoundPage(page);
-     if(origsamples + size >= PM_GetPageEnd())
--        Quit("SD_PrepareSound(%i): Sound reaches out of page file!\n", which);
-+        return false;
- 
-     int destsamples = (int) ((float) size * (float) param_samplerate
-         / (float) ORIGSAMPLERATE);
-@@ -449,6 +453,7 @@ void SD_PrepareSound(int which)
-     SoundChunks[which] = Mix_LoadWAV_RW(temp, 1);
- 
-     free(wavebuffer);
-+    return true;
- }
- 
- int SD_PlayDigitized(word which,int leftpos,int rightpos)
-diff --git a/id_sd.h b/id_sd.h
-index 3ad8049..e280274 100644
---- a/id_sd.h
-+++ b/id_sd.h
-@@ -154,7 +154,7 @@ extern  boolean SD_SetMusicMode(byte mode);
- extern  word    SD_SoundPlaying(void);
- 
- extern  void    SD_SetDigiDevice(byte);
--extern  void	SD_PrepareSound(int which);
-+extern  boolean	SD_PrepareSound(int which);
- extern  int     SD_PlayDigitized(word which,int leftpos,int rightpos);
- extern  void    SD_StopDigitized(void);
- 
-diff --git a/wl_main.c b/wl_main.c
-index 840c6de..51ae333 100644
---- a/wl_main.c
-+++ b/wl_main.c
-@@ -1030,9 +1030,11 @@ void InitDigiMap (void)
- 
-     for (map = wolfdigimap; *map != LASTSOUND; map += 3)
-     {
-+        // Missing ones stay AdLib sounds
-+        if (!SD_PrepareSound(map[1]))
-+            continue;
-         DigiMap[map[0]] = map[1];
-         DigiChannel[map[1]] = map[2];
--        SD_PrepareSound(map[1]);
-     }
- }
- 
-@@ -1470,7 +1472,7 @@ static void DemoLoop()
-         #ifndef GOODTIMES
-         #ifndef SPEAR
-         #ifndef JAPAN
--        if (!param_nowait)
-+        if (!param_nowait && strcmp(extension, "wl1"))
-             NonShareware();
-         #endif
-         #else
-diff --git a/wl_menu.c b/wl_menu.c
-index 0b72c63..d591659 100644
---- a/wl_menu.c
-+++ b/wl_menu.c
-@@ -568,6 +568,16 @@ DrawMainMenu (void)
-         MainMenu[backtodemo].active = 1;
-     }
- 
-+#if !defined(SPEAR) && !defined(GOODTIMES)
-+    // Not every data has the "Read This!" pages
-+    if (gtgraphics)
-+    {
-+        MainMenu[readthis].active = 0;
-+        if (MainItems.curpos == readthis)
-+            MainItems.curpos = newgame;
-+    }
-+#endif
-+
-     DrawMenu (&MainItems, &MainMenu[0]);
-     VW_UpdateScreen ();
- }
-diff --git a/wl_text.c b/wl_text.c
-index 38a6aa3..94bf302 100644
---- a/wl_text.c
-+++ b/wl_text.c
-@@ -752,6 +752,8 @@ void HelpScreens (void)
-     void    *layout;
- #endif
- 
-+    if (gtgraphics)
-+        return;
- 
- #ifdef JAPAN
-     ShowArticle (0);

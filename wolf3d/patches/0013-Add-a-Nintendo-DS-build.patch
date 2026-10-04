@@ -1,0 +1,149 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Sun, 4 Oct 2026 12:18:34 +0200
+Subject: [PATCH] Add a Nintendo DS build
+
+Makefile.nds builds a .nds with devkitARM and libnds/calico, with the
+Apogee v1.4 graphics layout, the game data from NITRO_DIR embedded
+through NitroFS and ICON as the icon. The ray caster, the scaler, the
+fixed point math and memcpy/memset run from ITCM as ARM code, the rest
+is Thumb code in main RAM. Enums keep the size of an int, savegames hold
+structs with them. The signon screen isn't shown, so its 64 KiB picture
+isn't built in. The screen is the 320x200 frame of 8 bits, newlib has no
+sys/uio.h.
+---
+ .gitignore   |  4 +++
+ Makefile.nds | 79 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ id_ca.c      |  3 +-
+ id_vl.c      |  6 ++--
+ 4 files changed, 87 insertions(+), 5 deletions(-)
+ create mode 100644 Makefile.nds
+
+diff --git a/.gitignore b/.gitignore
+index ed406f8..74e32b2 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -79,3 +79,7 @@ Makefile.win
+ ##############
+ /.vscode
+ /build
++/build-nds/
++/wolf3d.elf
++/wolf3d.nds
++/wolf3d.lst
+diff --git a/Makefile.nds b/Makefile.nds
+new file mode 100644
+index 0000000..da66380
+--- /dev/null
++++ b/Makefile.nds
+@@ -0,0 +1,79 @@
++#---------------------------------------------------------------------------------
++# Nintendo DS (devkitARM + libnds) build of Wolf4SDL
++#   make -f Makefile.nds [ICON=icon.bmp] [NITRO_DIR=dir]
++#---------------------------------------------------------------------------------
++ifeq ($(strip $(DEVKITARM)),)
++$(error "Please set DEVKITARM in your environment. export DEVKITARM=<path to>devkitARM")
++endif
++
++GAME_TITLE     := Wolfenstein 3D
++GAME_SUBTITLE1 := id Software (1992)
++GAME_SUBTITLE2 := Wolf4SDL NDS port
++
++TARGET  := wolf3d
++BUILD   := build-nds
++OUTPUT  := $(CURDIR)/$(TARGET)
++
++ICON      ?=
++NITRO_DIR ?=
++GAME_ICON := $(or $(ICON),$(DEVKITPRO)/calico/share/nds-icon.bmp)
++ifneq ($(strip $(NITRO_DIR)),)
++NITRO_FILES := $(NITRO_DIR)
++endif
++
++# Must be set before ds_rules, which prepends the calico library path
++LIBPATHS := -L$(DEVKITPRO)/libnds/lib
++
++include $(DEVKITARM)/ds_rules
++
++SRC_WOLF := id_ca id_in id_pm id_sd id_us id_vh id_vl wl_act1 wl_act2 wl_agent wl_atmos \
++	wl_cloudsky wl_debug wl_game wl_inter wl_main wl_menu wl_parallax wl_plane wl_play wl_shade \
++	wl_state wl_text nds/opl nds/sdl nds/sdl_input nds/sdl_mixer nds/sdl_video nds/wl_nds nds/wl_touch
++
++# Hot code (the ray caster, the scaler, the fixed point math and memcpy and
++# memset) runs from ITCM
++SRC_ITCM := wl_draw wl_scale wl_utils nds/mem
++
++OFILES := $(addprefix $(BUILD)/,$(addsuffix .o,$(SRC_WOLF)) $(addsuffix .itcm.o,$(SRC_ITCM)))
++
++ARCH     := -march=armv5te -mtune=arm946e-s -mthumb
++# Savegames hold structs with enums, int sized like on the PC instead of only
++# as big as their values like the ARM EABI default. Libraries only get enums
++# as arguments. The Apogee v1.4 layout also runs the shareware and GT data.
++CFLAGS   := -g -O2 -Wall -Wno-unused -Wno-pointer-sign -Wno-format-truncation -Wno-misleading-indentation \
++	-Wno-dangling-else -Wno-parentheses -Wno-char-subscripts -Wno-maybe-uninitialized -Wno-format \
++	-Wno-missing-braces \
++	-ffunction-sections -fdata-sections -fno-strict-aliasing -fno-short-enums -std=gnu99 \
++	$(ARCH) -DARM9 -DVERSIONALREADYCHOSEN -DCARMACIZED \
++	-Inds -I. -I$(LIBNDS)/include -I$(CALICO)/include
++LDFLAGS  := -specs=ds_arm9.specs -g $(ARCH) -Wl,--no-enum-size-warning -Wl,-Map,$(BUILD)/$(TARGET).map
++LIBS     := -lfilesystem -lfat -lnds9 -lm
++LD       := $(CC)
++
++.PHONY: all clean
++all: $(OUTPUT).nds
++
++# Like the ds_rules default, plus a proper header title (homebrew game code kept)
++$(OUTPUT).nds: $(OUTPUT).elf $(GAME_ICON) $(wildcard $(NITRO_DIR)/*)
++	$(SILENTCMD)ndstool -c $@ -9 $< $(_ARM7_ELF) -b $(GAME_ICON) "$(GAME_TITLE);$(GAME_SUBTITLE1);$(GAME_SUBTITLE2)" \
++		-g "####" 00 "WOLF3D" $(_ADDFILES)
++	$(SILENTMSG) built ... $(notdir $@)
++
++$(OUTPUT).elf: $(OFILES)
++
++$(BUILD)/%.itcm.o: CFLAGS += -marm -mlong-calls
++$(BUILD)/nds/mem.itcm.o: CFLAGS += -fno-builtin -fno-tree-loop-distribute-patterns
++$(BUILD)/%.itcm.o: %.c
++	$(SILENTMSG) $(notdir $<)
++	@mkdir -p $(dir $@)
++	$(SILENTCMD)$(CC) -MMD -MP $(_EXTRADEFS) $(CFLAGS) -c $< -o $@
++
++$(BUILD)/%.o: %.c
++	$(SILENTMSG) $(notdir $<)
++	@mkdir -p $(dir $@)
++	$(SILENTCMD)$(CC) -MMD -MP $(_EXTRADEFS) $(CFLAGS) -c $< -o $@
++
++clean:
++	rm -rf $(BUILD) $(OUTPUT).elf $(OUTPUT).nds
++
++-include $(OFILES:.o=.d)
+diff --git a/id_ca.c b/id_ca.c
+index bcde0e2..3d927df 100644
+--- a/id_ca.c
++++ b/id_ca.c
+@@ -16,8 +16,7 @@ Id Software Caching Manager
+ #elif defined _arch_dreamcast
+     #include <unistd.h>
+ #else
+-    #include <sys/uio.h>
+-    #include <unistd.h>
++    #include <unistd.h>         // newlib has no sys/uio.h
+ #endif
+ 
+ #include "wl_def.h"
+diff --git a/id_vl.c b/id_vl.c
+index 9c3c9a3..ca55f61 100644
+--- a/id_vl.c
++++ b/id_vl.c
+@@ -28,9 +28,9 @@ int      screenBits = 8;
+ int      screenBits = 16;
+ #endif
+ #else
+-int16_t  screenWidth = 640;
+-int16_t  screenHeight = 400;
+-int      screenBits = -1;      // use "best" color depth according to libSDL
++int16_t  screenWidth = 320;    // the frame of the DS
++int16_t  screenHeight = 200;
++int      screenBits = 8;
+ #endif
+ 
+ SDL_Surface *screen = NULL;

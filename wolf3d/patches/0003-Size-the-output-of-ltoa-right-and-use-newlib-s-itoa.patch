@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Sun, 4 Oct 2026 12:18:32 +0200
+Subject: [PATCH] Size the output of ltoa right and use newlib's itoa
+
+ltoa sized its output by the old contents of the buffer, so numbers were
+cut short or written past the end. newlib has an itoa of its own.
+---
+ wl_def.h | 14 ++------------
+ 1 file changed, 2 insertions(+), 12 deletions(-)
+
+diff --git a/wl_def.h b/wl_def.h
+index a45a551..9197234 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -1486,20 +1486,10 @@ void GP2X_ButtonUp (int button);
+ #define ISPOINTER(x) ((((uintptr_t)(x)) & ~0xffff) != 0)
+ 
+ #ifndef _WIN32
+-    static inline char *itoa (int value, char *string, int radix)
+-    {
+-        int len = strlen(string) + 1;
+-
+-	    snprintf (string,len,"%d",value);
+-
+-	    return string;
+-    }
+-
++    // newlib has itoa
+     static inline char *ltoa (long value, char *string, int radix)
+     {
+-        int len = strlen(string) + 1;
+-
+-	    snprintf (string,len,"%ld",value);
++	    sprintf (string,"%ld",value);
+ 
+ 	    return string;
+     }

@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Sun, 4 Oct 2026 12:18:33 +0200
+Subject: [PATCH] Name savegames after the level
+
+There is no keyboard to type a name: a savegame is named after the
+episode and floor, also when it replaces an older one, so saving is
+pressing A twice.
+---
+ wl_menu.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/wl_menu.c b/wl_menu.c
+index 0b72c63..9d898a1 100644
+--- a/wl_menu.c
++++ b/wl_menu.c
+@@ -1575,6 +1575,9 @@ CP_SaveGame (int quick)
+             ShootSnd ();
+ 
+             snprintf (input,sizeof(input),"%s",SaveGameNames[which]);
++            // Named after the level, also when it replaces a savegame, so
++            // saving is just pressing A again
++            snprintf (input,sizeof(input),"Episode %d Floor %d",gamestate.episode + 1,gamestate.mapon + 1);
+             name[7] = which + '0';
+ 
+             fontnumber = 0;

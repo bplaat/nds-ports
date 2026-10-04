@@ -3,6 +3,45 @@
 A port of [Wolf4SDL](https://github.com/KS-Presto/Wolf4SDL), the portable
 source port of id Software's Wolfenstein 3D, to the Nintendo DS and DSi.
 
+## Controls
+
+| Button | In game       | In menus     |
+| ------ | ------------- | ------------ |
+| D-pad  | Move and turn | Navigate     |
+| A      | Fire          | Select / yes |
+| B      | Open / use    | Back / no    |
+| X      | Next weapon   |              |
+| Y      | Run (hold)    |              |
+| L / R  | Strafe        |              |
+| START  | Menu          | Back         |
+| Stylus | Tap a weapon  |              |
+
+The title shows while the game loads and stays with its music until you
+press a button, then the main menu shows: New Game, Load Game, Save Game,
+View Scores, Back to Demo (or B), which shows the title and the demos, and
+Quit. In a game End Game takes the place of Quit.
+All the sound is always on, the DS volume slider sets the loudness.
+
+The top screen shows the view at 1:1, the menus and pictures are scaled to
+fit. The touch screen looks like the status bar: the status bar itself at
+the top, the map in the middle, following you, with the episode, floor and
+time and the kills, treasure and secrets, and at the bottom a cell for each
+weapon, in color, dark until you have it, the one in your hands in a gold
+frame. Tap a weapon to select it. The map shows the explored part of the
+level, the walls in the colors of their textures, the doors in the colors of
+their keys and the items you have seen: treasure gold, health green, ammo
+and weapons gray, extra lives blue. Outside of a game the touch screen shows
+the controls.
+
+Closing the lid puts the console to sleep. L+R+START+SELECT, or the DSi power
+button, quits.
+
+Savegames are named after the episode and floor, also when they replace an
+older one, there is no keyboard to type a name, so saving is pressing A
+twice. To rename one, UP/DOWN change a letter and LEFT/RIGHT move the cursor.
+
+## Building
+
 ```sh
 ./build.sh                  # fetch, patch and build target/wolf3d.nds
 ./build.sh dev              # fetch and patch, then edit and commit in target/Wolf4SDL-*/
@@ -12,10 +51,10 @@ source port of id Software's Wolfenstein 3D, to the Nintendo DS and DSi.
 
 ## Game data
 
-| Files   | Game                                                               |
-| ------- | ------------------------------------------------------------------ |
-| `*.wl6` | Wolfenstein 3D v1.4, Apogee or GT/id/Activision (Steam, GOG) data  |
-| `*.wl3` | Wolfenstein 3D v1.4, episodes 1 to 3                               |
+| Files   | Game                                                              |
+| ------- | ----------------------------------------------------------------- |
+| `*.wl6` | Wolfenstein 3D v1.4, Apogee or GT/id/Activision (Steam, GOG) data |
+| `*.wl3` | Wolfenstein 3D v1.4, episodes 1 to 3                              |
 | `*.wl1` | Wolfenstein 3D shareware v1.4, downloaded and embedded by default |
 
 The freely redistributable shareware (episode 1) is fetched from archive.org,
@@ -33,56 +72,113 @@ you can still play, saving then shows a message instead. Wolf4SDL's command
 line options such as `--goobers` or `--tedlevel 3 --hard` can be put in
 `/data/wolf3d/args.txt`.
 
-## Controls
+## Changes to Wolf4SDL
 
-| Button | In game                                      | In menus             |
-| ------ | -------------------------------------------- | -------------------- |
-| D-pad  | Move and turn                                | Navigate             |
-| A      | Fire                                         | Select / yes         |
-| B      | Open / use                                   | Back / no            |
-| X      | Next weapon                                  | Backspace (in names) |
-| Y      | Run (hold)                                   |                      |
-| L / R  | Strafe                                       |                      |
-| START  | Menu                                         | Back                 |
-| SELECT | Zoom the map                                 |                      |
-| Stylus | Drag to turn, tap the weapon and map buttons |                      |
+The [patches](patches/) apply on top of Wolf4SDL in order: first the
+changes to the game itself, then the DS platform. Each patch only adds to
+or changes upstream code, none changes what an earlier patch added, and the
+code is written for the DS only, without `__NDS__` checks.
 
-The buttons are Wolfenstein's joystick, so A, B, X and Y can be rebound in
-Control > Customize controls. New savegames are named after the episode and
-floor, so saving is pressing A twice. To rename one, UP/DOWN change a letter
-and LEFT/RIGHT move the cursor.
+### Game data
 
-The touch screen shows the status bar, the explored part of the level as a
-map around the player, with the walls in the colors of their textures and
-the doors in the colors of their keys, and buttons for the four weapons. The
-top screen shows the 3D view without a status bar, Change View in the menu
-makes it smaller and faster.
+- [0001](patches/0001-Run-the-shareware-and-GT-data-in-Apogee-v1.4-builds.patch):
+  The Apogee v1.4 graphics layout is a superset of the others, the GT, id
+  and Activision data lacks twelve "Read This!" pictures and the shareware
+  the end texts of episodes 2 to 6. Their chunks are marked missing, so one
+  build plays the shareware, the Apogee and the GT/id/Activision data.
+- [0002](patches/0002-Skip-the-digitized-sounds-the-data-lacks.patch):
+  The digitized sounds the shareware lacks stay AdLib sounds instead of
+  ending the game.
+- [0003](patches/0003-Size-the-output-of-ltoa-right-and-use-newlib-s-itoa.patch):
+  `ltoa` sized its output by the old contents of the buffer, newlib has an
+  `itoa` of its own.
 
-## How it works on the DS
+### Menus and savegames
 
-- Wolf4SDL runs on a small implementation of the parts of SDL 2 and
-  SDL_mixer it uses (`nds/`), so its own code is barely changed. One build,
-  with the Apogee v1.4 graphics layout, plays the shareware, the Apogee and
-  the GT/id/Activision data.
-- The 320x200 frame is copied by DMA into VRAM and scaled to 256x192 by the
-  affine background hardware, and a second, alpha blended background layer
-  sampling half a pixel further smooths it. The game palette is the
-  hardware palette, so fades and the damage and pickup flashes cost nothing.
-- The walls are drawn through a strip of 8 columns in DTCM that is copied
-  into the frame in words, as drawing straight down the columns of a frame
-  in main RAM misses the cache with every pixel. The ray caster, the scaler
-  and the fixed point math run from ITCM.
-- The AdLib music and sound effects play the OPL2 register writes on the
-  sound hardware instead of emulating the chip sample by sample, which took
-  most of the ARM9: every OPL channel is a hardware channel looping one
-  period of the waveform its two FM operators make, at its pitch, with the
-  envelopes, key scaling and levels of the MAME emulator done in software.
-- The digitized sounds play as they are on hardware channels 0-5, with the
-  positional stereo of Wolf4SDL. The PC speaker sounds are mixed into a
-  stream on channel 6.
-- Wolf4SDL keeps all game data in memory, about 1.6 MiB for the shareware,
-  which leaves room for the full game in the 4 MiB of the DS.
+- [0004](patches/0004-Answer-prompts-with-the-A-and-B-buttons.patch):
+  Prompts name the A and B buttons, which answer them, instead of Y and N.
+- [0005](patches/0005-Name-savegames-after-the-level.patch): Savegames
+  are named after the level, eg. "Episode 1 Floor 3", also when they replace
+  an older one.
+- [0006](patches/0006-Show-a-message-when-a-savegame-can-t-be-written.patch):
+  Without an SD card saving shows a message instead of crashing.
+- [0007](patches/0007-Trim-the-menus-for-a-handheld-console.patch): No
+  Read This! (keyboard help) or Change View, New Game is selected first and
+  the episodes the shareware lacks say where the full game goes. There is
+  no Control menu, the buttons are the joystick, without mouse or keyboard,
+  and no Sound menu, all the sound is on. In a game there is no Quit. B
+  leaves the main menu like Back to Game/Demo instead of asking to quit.
+- [0008](patches/0008-Start-in-the-main-menu.patch): The game starts with
+  the title and its music until a button is pressed, then the main menu,
+  without the signon screen and its "Press a key" or the PG13 screen, and
+  goes back to the menu after a game. It shows no empty frame while
+  it loads, so the title can show meanwhile.
 
-In melonDS emulating a DS the first level plays at 38 fps with the full
-screen view and 47 fps at the view size the PC version starts with. The DSi runs its ARM9 at twice the
-speed.
+### Rendering
+
+- [0009](patches/0009-Use-the-DS-hardware-divider.patch): The ARM9 has
+  no divide instruction, `FixedDiv` and the height of every wall column use
+  the DS hardware divider.
+- [0010](patches/0010-Keep-Wolfenstein-s-proportions-on-square-pixels.patch):
+  Wolfenstein's 320x200 had pixels 1.2 times taller than wide on a 4:3
+  monitor, so on the square pixels of the DS heights are 1.2 times the widths
+  (`PIXELASPECT`). Walls, sprites and the weapon keep their proportions with
+  the same field of view.
+- [0011](patches/0011-Fill-the-DS-top-screen-with-the-view.patch): The
+  view always is the 256x192 of the top screen, in the top left corner of
+  the 320x200 screen, without status bar or border. `viewonscreen` tells the
+  platform when the screen shows it, from its first frame until the screen
+  fades out, other frames are made for 320x200 and shown scaled. Get Psyched
+  is drawn in the view too, without the status bar under it.
+- [0012](patches/0012-Draw-the-walls-through-a-strip-in-DTCM.patch):
+  Writing posts down the columns of the frame misses the data cache with
+  every pixel, so the walls, with their ceiling and floor, are drawn into a
+  strip of 8 columns in DTCM that is copied into the frame in words. The
+  texture steps in fixed point from a copy of its column in DTCM, four pixels
+  per loop.
+
+### The DS platform
+
+Wolf4SDL runs on a small implementation of the parts of SDL 2 and SDL_mixer
+it uses, in `nds/`, so its own code is barely changed.
+
+- [0013](patches/0013-Add-a-Nintendo-DS-build.patch): `Makefile.nds`
+  builds the `.nds` with devkitARM and libnds/calico, with the Apogee v1.4
+  graphics layout. The ray caster, the scaler, the fixed point math and
+  `memcpy`/`memset` run from ITCM as ARM code, the rest is Thumb code in
+  main RAM.
+- [0014](patches/0014-Add-the-DS-startup.patch): `wl_nds.c` finds the game
+  data in NitroFS and on the SD card, keeps config and saves in
+  `/data/wolf3d/` and reads `args.txt`. As soon as the data is found, it shows
+  the title on the top screen while the game loads, expanding only its chunk
+  of the graphics. Errors are shown on the touch screen.
+- [0015](patches/0015-Add-the-SDL-core-on-the-DS.patch): `sdl.c` and the
+  SDL headers: initialization, time and message boxes.
+- [0016](patches/0016-Add-DS-video.patch): `sdl_video.c` page flips two
+  8bpp VRAM backgrounds on vblank. DMA copies each frame there while the game
+  draws the next one, a row at a time chained by interrupts, only the view
+  while the screen shows it, at 1:1. Other frames use the affine background
+  hardware to scale, smoothed by a second layer half a pixel further that is
+  alpha blended on top. The game palette is the hardware palette, so fades
+  and flashes cost nothing.
+- [0017](patches/0017-Add-DS-buttons.patch): `sdl_input.c` makes START the
+  escape key and the other buttons Wolfenstein's joystick, which is always
+  enabled.
+- [0018](patches/0018-Add-the-DS-touch-screen.patch): `wl_touch.c` draws
+  the status bar, the map and the weapon cells from the game's own graphics,
+  the weapons from their sprites (the machine guns as picked up, the knife
+  and pistol as held), copies the parts that changed to VRAM by DMA, selects the weapon tapped
+  and handles the lid and power button.
+- [0019](patches/0019-Add-DS-sound.patch): `sdl_mixer.c` plays the digitized
+  sounds as they are on hardware channels 0-5, with the positional stereo of
+  Wolf4SDL, and mixes the music hook and the PC speaker into a stream on
+  channel 6 from a 700 Hz thread.
+- [0020](patches/0020-Play-the-AdLib-on-the-DS-sound-hardware.patch):
+  `opl.c` plays the OPL2 register writes on the sound hardware instead of
+  emulating the chip sample by sample, which took most of the ARM9: every OPL
+  channel is a hardware channel looping one period of the waveform its two
+  FM operators make, at its pitch, with the envelopes, key scaling and levels
+  of the MAME emulator done in software.
+- [0021](patches/0021-Copy-memory-fast-on-the-DS.patch): `mem.c` replaces
+  newlib's `memcpy` and `memset`, which copy a byte at a time in Thumb mode,
+  with word copies from ITCM.

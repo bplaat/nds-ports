@@ -1,20 +1,20 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: nds-ports <nds-ports@localhost>
-Date: Thu, 1 Oct 2026 09:31:21 +0200
+Date: Sun, 4 Oct 2026 12:18:33 +0200
 Subject: [PATCH] Show a message when a savegame can't be written
 
-Saving wrote to the file without checking that it could be created, so
-saving where that is not possible, like in a read-only directory,
-crashed. Quick saves now do nothing then, the menu says so.
+Without an SD card nothing can be written, saving then plays the "no
+way" sound and shows a message instead of crashing on a NULL file. The
+slot keeps its old name and state.
 ---
  wl_menu.c | 18 +++++++++++++++---
  1 file changed, 15 insertions(+), 3 deletions(-)
 
 diff --git a/wl_menu.c b/wl_menu.c
-index d591659..94beadf 100644
+index 9d898a1..de012eb 100644
 --- a/wl_menu.c
 +++ b/wl_menu.c
-@@ -1537,6 +1537,8 @@ CP_SaveGame (int quick)
+@@ -1527,6 +1527,8 @@ CP_SaveGame (int quick)
  
              unlink (savepath);
              file = fopen (savepath, "wb");
@@ -23,7 +23,7 @@ index d591659..94beadf 100644
  
              snprintf (input,sizeof(input),"%s",SaveGameNames[which]);
  
-@@ -1597,9 +1599,6 @@ CP_SaveGame (int quick)
+@@ -1590,9 +1592,6 @@ CP_SaveGame (int quick)
                  (LSM_X + LSItems.indent + 2, LSM_Y + which * 13 + 1, input, input, true, 31,
                   LSM_W - LSItems.indent - 30))
              {
@@ -33,7 +33,7 @@ index d591659..94beadf 100644
                  if (configdir[0])
                      snprintf (savepath, sizeof(savepath), "%s/%s", configdir, name);
                  else
-@@ -1607,6 +1606,19 @@ CP_SaveGame (int quick)
+@@ -1600,6 +1599,19 @@ CP_SaveGame (int quick)
  
                  unlink (savepath);
                  file = fopen (savepath, "wb");

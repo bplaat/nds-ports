@@ -1,0 +1,204 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Sun, 4 Oct 2026 12:18:33 +0200
+Subject: [PATCH] Trim the menus for a handheld console
+
+No Read This!, which explains the keyboard, no Change View, the view
+always fills the top screen, no Control: the buttons are the joystick,
+without mouse or keyboard, and customizing them captured the B button
+that leaves the screen, and no Sound: all the sound is always on, also
+with an older config. In a game the menu has no Quit, End Game leaves
+it. New Game is the first item selected, ReadConfig no longer
+reactivates the item that was Read This! by its index. Back (B or START)
+leaves the main menu like Back to Game/Demo instead of asking to quit,
+Quit still asks.
+
+The episodes the shareware lacks say where the data of the full game
+goes instead of pointing to Read This!.
+---
+ wl_main.c |  6 +++++-
+ wl_menu.c | 53 +++++++++--------------------------------------------
+ wl_menu.h | 12 +-----------
+ 3 files changed, 15 insertions(+), 56 deletions(-)
+
+diff --git a/wl_main.c b/wl_main.c
+index e88c4e2..44e1e4e 100644
+--- a/wl_main.c
++++ b/wl_main.c
+@@ -200,7 +200,6 @@ void ReadConfig(void)
+         if(viewsize<4) viewsize=4;
+         else if(viewsize>21) viewsize=21;
+ 
+-        MainMenu[6].active=1;
+         MainItems.curpos=0;
+     }
+     else
+@@ -235,6 +234,11 @@ noconfig:
+         mouseadjustment=5;
+     }
+ 
++    // There is no sound menu, all the sound is on
++    sd = sdm_AdLib;
++    sm = smm_AdLib;
++    sds = sds_SoundBlaster;
++
+     SD_SetMusicMode (sm);
+     SD_SetSoundMode (sd);
+     SD_SetDigiDevice (sds);
+diff --git a/wl_menu.c b/wl_menu.c
+index de012eb..38c2469 100644
+--- a/wl_menu.c
++++ b/wl_menu.c
+@@ -30,7 +30,7 @@ void SetTextColor (CP_itemtype *items, int hlight);
+ #define STARTITEM       newgame
+ 
+ #else
+-#define STARTITEM       readthis
++#define STARTITEM       newgame
+ #endif
+ #endif
+ 
+@@ -50,36 +50,16 @@ char endStrings[9][80] = {
+ CP_itemtype MainMenu[] = {
+ #ifdef JAPAN
+     {1, "", CP_NewGame},
+-    {1, "", CP_Sound},
+-    {1, "", CP_Control},
+     {1, "", CP_LoadGame},
+     {0, "", CP_SaveGame},
+-    {1, "", CP_ChangeView},
+-    {2, "", CP_ReadThis},
+     {1, "", CP_ViewScores},
+     {1, "", 0},
+     {1, "", 0}
+ #else
+ 
+     {1, STR_NG, CP_NewGame},
+-    {1, STR_SD, CP_Sound},
+-    {1, STR_CL, CP_Control},
+     {1, STR_LG, CP_LoadGame},
+     {0, STR_SG, CP_SaveGame},
+-    {1, STR_CV, CP_ChangeView},
+-
+-#ifndef GOODTIMES
+-#ifndef SPEAR
+-
+-#ifdef SPANISH
+-    {2, "Ve esto!", CP_ReadThis},
+-#else
+-    {2, "Read This!", CP_ReadThis},
+-#endif
+-
+-#endif
+-#endif
+-
+     {1, STR_VS, CP_ViewScores},
+     {1, STR_BD, 0},
+     {1, STR_QT, 0}
+@@ -475,6 +455,8 @@ US_ControlPanel (ScanCode scancode)
+                 }
+                 break;
+ 
++            // Back leaves the menu like Back to Game/Demo
++            case -1:
+             case backtodemo:
+                 StartGame = 1;
+                 if (!ingame)
+@@ -482,7 +464,6 @@ US_ControlPanel (ScanCode scancode)
+                 VL_FadeOut (0, 255, 0, 0, 0, 10);
+                 break;
+ 
+-            case -1:
+             case quit:
+                 CP_Quit (0);
+                 break;
+@@ -540,9 +521,11 @@ DrawMainMenu (void)
+ #ifdef SPANISH
+     DrawWindow (MENU_X - 8, MENU_Y - 3, MENU_W + 8, MENU_H, BKGDCOLOR);
+ #else
+-    DrawWindow (MENU_X - 8, MENU_Y - 3, MENU_W, MENU_H, BKGDCOLOR);
++    // Without Quit in a game, End Game leaves it
++    DrawWindow (MENU_X - 8, MENU_Y - 3, MENU_W, MENU_H - (ingame ? 13 : 0), BKGDCOLOR);
+ #endif
+ #endif
++    MainItems.amount = lengthof(MainMenu) - (ingame ? 1 : 0);
+ 
+     //
+     // CHANGE "GAME" AND "DEMO"
+@@ -884,9 +867,9 @@ CP_NewGame (int blank)
+                 if (!EpisodeSelect[which / 2])
+                 {
+                     SD_PlaySound (NOWAYSND);
+-                    Message ("Please select \"Read This!\"\n"
+-                             "from the Options menu to\n"
+-                             "find out how to order this\n" "episode from Apogee.");
++                    Message ("This episode is in the full\n"
++                             "game. Copy its data files\n"
++                             "to /data/wolf3d/ on the\n" "SD card to play it.");
+                     IN_ClearKeysDown ();
+                     IN_Ack ();
+                     DrawNewEpisode ();
+@@ -955,15 +938,6 @@ CP_NewGame (int blank)
+     StartGame = 1;
+     MenuFadeOut ();
+ 
+-    //
+-    // CHANGE "READ THIS!" TO NORMAL COLOR
+-    //
+-#ifndef SPEAR
+-#ifndef GOODTIMES
+-    MainMenu[readthis].active = 1;
+-#endif
+-#endif
+-
+     pickquick = 0;
+ 
+     return 0;
+@@ -1397,15 +1371,6 @@ CP_LoadGame (int quick)
+ 
+             StartGame = 1;
+             ShootSnd ();
+-            //
+-            // CHANGE "READ THIS!" TO NORMAL COLOR
+-            //
+-
+-#ifndef SPEAR
+-#ifndef GOODTIMES
+-            MainMenu[readthis].active = 1;
+-#endif
+-#endif
+ 
+             exit = 1;
+             break;
+diff --git a/wl_menu.h b/wl_menu.h
+index 7d6fdd0..0140849 100644
+--- a/wl_menu.h
++++ b/wl_menu.h
+@@ -51,7 +51,7 @@
+ #define MENU_W  178
+ #ifndef SPEAR
+ #ifndef GOODTIMES
+-#define MENU_H  13*10+6
++#define MENU_H  13*6+6
+ #else
+ #define MENU_H  13*9+6
+ #endif
+@@ -209,18 +209,8 @@ enum {MOUSE,JOYSTICK,KEYBOARDBTNS,KEYBOARDMOVE};        // FOR INPUT TYPES
+ enum menuitems
+ {
+         newgame,
+-        soundmenu,
+-        control,
+         loadgame,
+         savegame,
+-        changeview,
+-
+-#ifndef GOODTIMES
+-#ifndef SPEAR
+-        readthis,
+-#endif
+-#endif
+-
+         viewscores,
+         backtodemo,
+         quit
