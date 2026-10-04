@@ -67,6 +67,10 @@ a mod keeps its own in `saves/<mod>.wad/`. Without one you can still play,
 saving then shows a message instead. Extra command line options such as
 `-skill 4` or `-warp 1 3` can be put in `/data/doom/args.txt`.
 
+## Screenshot
+
+![DOOM on the Nintendo DS: E1M5 on the top screen, the status bar, map and weapons on the touch screen](docs/screenshot.png)
+
 ## Changes to doomgeneric
 
 The [patches](patches/) apply on top of doomgeneric in order: first the

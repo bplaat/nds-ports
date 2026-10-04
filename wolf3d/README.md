@@ -72,6 +72,10 @@ you can still play, saving then shows a message instead. Wolf4SDL's command
 line options such as `--goobers` or `--tedlevel 3 --hard` can be put in
 `/data/wolf3d/args.txt`.
 
+## Screenshot
+
+![Wolfenstein 3D on the Nintendo DS: floor 3 on the top screen, the status bar, map and weapons on the touch screen](docs/screenshot.png)
+
 ## Changes to Wolf4SDL
 
 The [patches](patches/) apply on top of Wolf4SDL in order: first the
