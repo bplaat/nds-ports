@@ -3,28 +3,29 @@ From: nds-ports <nds-ports@localhost>
 Date: Sun, 4 Oct 2026 12:18:34 +0200
 Subject: [PATCH] Add the DS startup
 
-wl_nds.c finds the game data in /data/wolf3d/ on the SD card, next to
-the .nds, at the root of the SD card or embedded in the ROM, the full
-game before the shareware, and keeps the config and savegames in
-/data/wolf3d/, or in the ROM without an SD card. Extra arguments are
-read from args.txt there. As soon as the data is found the title picture
-shows on the top screen while the game loads: only its chunk is read
-and expanded. Errors are shown on the touch screen console. wl_nds.h is
-the glue between the SDL implementation and the game.
+wl_nds.c switches the ARM9 to 134 MHz in DSi mode, finds the game data
+in /data/wolf3d/ on the SD card, next to the .nds, at the root of the SD
+card or embedded in the ROM, the full game before the shareware, and
+keeps the config and savegames in /data/wolf3d/, or in the ROM without
+an SD card. Extra arguments are read from args.txt there. As soon as the
+data is found the title picture shows on the top screen while the game
+loads: only its chunk is read and expanded. Errors are shown on the
+touch screen console. wl_nds.h is the glue between the SDL
+implementation and the game.
 ---
- nds/wl_nds.c | 246 +++++++++++++++++++++++++++++++++++++++++++++++++++
- nds/wl_nds.h |  38 ++++++++
+ nds/wl_nds.c | 258 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ nds/wl_nds.h |  43 +++++++++
  wl_main.c    |   2 +
- 3 files changed, 286 insertions(+)
+ 3 files changed, 303 insertions(+)
  create mode 100644 nds/wl_nds.c
  create mode 100644 nds/wl_nds.h
 
 diff --git a/nds/wl_nds.c b/nds/wl_nds.c
 new file mode 100644
-index 0000000..c06c5bc
+index 0000000..266773c
 --- /dev/null
 +++ b/nds/wl_nds.c
-@@ -0,0 +1,246 @@
+@@ -0,0 +1,258 @@
 +//
 +// Starts Wolf4SDL on the Nintendo DS
 +//
@@ -203,6 +204,10 @@ index 0000000..c06c5bc
 +    static char dirs[4][256], datadir[256];
 +    int num_dirs = 0, i, j, n = 0;
 +
++    // In DSi mode the ARM9 runs at twice the speed of the DS
++    if (isDSiMode ())
++        setCpuClock (true);
++
 +    // A black top screen until the title shows
 +    videoSetMode (MODE_0_2D);
 +    setBackdropColor (0);
@@ -271,12 +276,20 @@ index 0000000..c06c5bc
 +    *height = TOPSCREENHEIGHT;
 +    return viewonscreen;
 +}
++
++bool NDS_NewViewDrawn (void)
++{
++    bool drawn = viewdrawn;
++
++    viewdrawn = false;
++    return drawn;
++}
 diff --git a/nds/wl_nds.h b/nds/wl_nds.h
 new file mode 100644
-index 0000000..427e759
+index 0000000..9e0f6fe
 --- /dev/null
 +++ b/nds/wl_nds.h
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,43 @@
 +//
 +// Nintendo DS platform glue between the SDL implementation (sdl*.c) and the
 +// game: its startup (wl_nds.c) and the touch screen (wl_touch.c)
@@ -306,8 +319,13 @@ index 0000000..427e759
 +// the top left corner of the frame, and its size
 +bool NDS_ViewOnScreen (int *width, int *height);
 +
-+// Draws the touch screen after every frame shown
++// Whether the game drew a whole new view since the last call
++bool NDS_NewViewDrawn (void);
++
++// Draws the touch screen after every frame shown, and scrolls its map on
++// vblank
 +void NDS_UpdateSubScreen (void);
++void NDS_SubScreenVBlank (void);
 +
 +// Handles the stylus and the buttons outside the joystick, called by the
 +// event pump with the keys that went down

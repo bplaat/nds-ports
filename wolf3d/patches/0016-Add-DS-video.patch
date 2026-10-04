@@ -8,23 +8,25 @@ and shows the screen surface from one of two 8bpp bitmap backgrounds in
 VRAM, page flipped on vblank. DMA copies the frame to VRAM a row at a
 time, each row started from the interrupt of the last (from ITCM, as the
 DMA has the main RAM bus), while the game draws the next one. While the
-screen shows the view only it is copied and shown at 1:1, other frames
+screen shows the view only it is copied and shown at 1:1, and when the
+game drew a whole new view, the frame goes to the screen surface by
+swapping their pixels instead of a copy. Other frames
 are scaled to the top screen by the affine background hardware, smoothed
 by a half pixel offset second layer that is alpha blended on top. The
 palette of the screen surface is the hardware palette, so fades and
 flashes cost nothing. NDS_ShowSplash shows a picture before the game
 shows its first frame.
 ---
- nds/sdl_video.c | 359 ++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 359 insertions(+)
+ nds/sdl_video.c | 368 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 368 insertions(+)
  create mode 100644 nds/sdl_video.c
 
 diff --git a/nds/sdl_video.c b/nds/sdl_video.c
 new file mode 100644
-index 0000000..0622a71
+index 0000000..24d44cc
 --- /dev/null
 +++ b/nds/sdl_video.c
-@@ -0,0 +1,359 @@
+@@ -0,0 +1,368 @@
 +//
 +// SDL video on the Nintendo DS
 +//
@@ -125,6 +127,7 @@ index 0000000..0622a71
 +
 +static void VBlankHandler (void)
 +{
++    NDS_SubScreenVBlank ();
 +    // A CPU copy, DMA would miss palette writes still in the data cache
 +    if (palette_dirty)
 +    {
@@ -331,7 +334,9 @@ index 0000000..0622a71
 +}
 +
 +// Only whole surfaces of the same size are blitted, of the view only what
-+// the top screen shows
++// the top screen shows. A whole new view goes to the screen by swapping the
++// pixels of the two instead, the game then draws the next one into the
++// last.
 +int SDL_BlitSurface (SDL_Surface *src, const SDL_Rect *srcrect, SDL_Surface *dst, SDL_Rect *dstrect)
 +{
 +    const Uint8 *from = src->pixels;
@@ -340,13 +345,19 @@ index 0000000..0622a71
 +
 +    if (src->w != dst->w || src->h != dst->h)
 +        return -1;
++    // The last frame may still be copied out of it
++    WaitForCopy ();
 +    if (!NDS_ViewOnScreen (&w, &h))
 +    {
 +        w = src->w;
 +        h = src->h;
 +    }
-+    // The last frame may still be copied out of it
-+    WaitForCopy ();
++    else if (dst == screen && NDS_NewViewDrawn ())
++    {
++        dst->pixels = src->pixels;
++        src->pixels = to;
++        return 0;
++    }
 +    for (y = 0; y < h; ++y, from += src->pitch, to += dst->pitch)
 +        memcpy (to, from, w);
 +    return 0;

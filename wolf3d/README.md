@@ -134,12 +134,13 @@ code is written for the DS only, without `__NDS__` checks.
   platform when the screen shows it, from its first frame until the screen
   fades out, other frames are made for 320x200 and shown scaled. Get Psyched
   is drawn in the view too, without the status bar under it.
-- [0012](patches/0012-Draw-the-walls-through-a-strip-in-DTCM.patch):
-  Writing posts down the columns of the frame misses the data cache with
-  every pixel, so the walls, with their ceiling and floor, are drawn into a
-  strip of 8 columns in DTCM that is copied into the frame in words. The
-  texture steps in fixed point from a copy of its column in DTCM, four pixels
-  per loop.
+- [0012](patches/0012-Draw-the-view-through-strips-in-DTCM.patch):
+  Writing the view down the columns of the frame misses the data cache with
+  every pixel, so the ray caster and the sprites only note their columns and
+  the view is put together in strips of 8 columns in DTCM: the ceiling and
+  floor, the wall posts and the sprite columns over them, then copied into
+  the frame in doublewords. The texture steps in fixed point from a copy of
+  its column in DTCM, four pixels per loop.
 
 ### The DS platform
 
@@ -151,28 +152,33 @@ it uses, in `nds/`, so its own code is barely changed.
   graphics layout. The ray caster, the scaler, the fixed point math and
   `memcpy`/`memset` run from ITCM as ARM code, the rest is Thumb code in
   main RAM.
-- [0014](patches/0014-Add-the-DS-startup.patch): `wl_nds.c` finds the game
-  data in NitroFS and on the SD card, keeps config and saves in
-  `/data/wolf3d/` and reads `args.txt`. As soon as the data is found, it shows
-  the title on the top screen while the game loads, expanding only its chunk
-  of the graphics. Errors are shown on the touch screen.
+- [0014](patches/0014-Add-the-DS-startup.patch): `wl_nds.c` switches the
+  ARM9 to 134 MHz in DSi mode, finds the game data in NitroFS and on the SD
+  card, keeps config and saves in `/data/wolf3d/` and reads `args.txt`. As
+  soon as the data is found, it shows the title on the top screen while the
+  game loads, expanding only its chunk of the graphics. Errors are shown on
+  the touch screen.
 - [0015](patches/0015-Add-the-SDL-core-on-the-DS.patch): `sdl.c` and the
   SDL headers: initialization, time and message boxes.
 - [0016](patches/0016-Add-DS-video.patch): `sdl_video.c` page flips two
   8bpp VRAM backgrounds on vblank. DMA copies each frame there while the game
   draws the next one, a row at a time chained by interrupts, only the view
-  while the screen shows it, at 1:1. Other frames use the affine background
-  hardware to scale, smoothed by a second layer half a pixel further that is
-  alpha blended on top. The game palette is the hardware palette, so fades
-  and flashes cost nothing.
+  while the screen shows it, at 1:1. A whole new view reaches the screen
+  surface by swapping their pixels instead of a copy.
+  Other frames use the affine background hardware to scale, smoothed by a
+  second layer half a pixel further that is alpha blended on top. The game
+  palette is the hardware palette, so fades and flashes cost nothing.
 - [0017](patches/0017-Add-DS-buttons.patch): `sdl_input.c` makes START the
   escape key and the other buttons Wolfenstein's joystick, which is always
-  enabled.
+  enabled. The d-pad turns slower than it moves, at half speed for the first
+  tics so a tap can aim.
 - [0018](patches/0018-Add-the-DS-touch-screen.patch): `wl_touch.c` draws
   the status bar, the map and the weapon cells from the game's own graphics,
   the weapons from their sprites (the machine guns as picked up, the knife
   and pistol as held), copies the parts that changed to VRAM by DMA, selects the weapon tapped
-  and handles the lid and power button.
+  and handles the lid and power button. The map is a bitmap background of
+  its own, scrolled by the hardware to follow the player and shown in its
+  panel by a window, so only the tiles that change are drawn.
 - [0019](patches/0019-Add-DS-sound.patch): `sdl_mixer.c` plays the digitized
   sounds as they are on hardware channels 0-5, with the positional stereo of
   Wolf4SDL, and mixes the music hook and the PC speaker into a stream on

@@ -7,11 +7,16 @@ sdl_input.c makes START the escape key and A, B, X, Y, L and R joystick
 0, with the d-pad as its axes. Wolfenstein's joystick bindings put them
 on fire, use, next weapon, run and strafing. The joystick is always
 enabled, a config can't turn the buttons off. There is no mouse.
+
+The d-pad turns a bit slower than it moves, and at half that
+for the first 12 tics so a tap can aim, like DOOM. Turning at the move
+speed made the player hard to control on the hardware.
 ---
  nds/sdl_input.c | 185 ++++++++++++++++++++++++++++++++++++++++++++++++
+ wl_def.h        |   5 +-
  wl_main.c       |   4 +-
- wl_play.c       |   5 +-
- 3 files changed, 190 insertions(+), 4 deletions(-)
+ wl_play.c       |  27 +++++--
+ 4 files changed, 211 insertions(+), 10 deletions(-)
  create mode 100644 nds/sdl_input.c
 
 diff --git a/nds/sdl_input.c b/nds/sdl_input.c
@@ -205,6 +210,22 @@ index 0000000..4300f62
 +{
 +    return button >= 0 && button < SDL_JoystickNumButtons (joystick) && (keys_held & joy_buttons[button]);
 +}
+diff --git a/wl_def.h b/wl_def.h
+index 7f531d1..12b2766 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -1056,8 +1056,9 @@ void    UpdateSoundLoc (void);
+ 
+ #define BASEMOVE    35
+ #define RUNMOVE     70
+-#define BASETURN    35
+-#define RUNTURN     70
++#define BASETURN    31
++#define RUNTURN     62
++#define SLOWTURNTICS 12
+ 
+ #define JOYSCALE    2
+ 
 diff --git a/wl_main.c b/wl_main.c
 index 543f2bb..8152b0e 100644
 --- a/wl_main.c
@@ -221,7 +242,7 @@ index 543f2bb..8152b0e 100644
          if(mouseadjustment<0) mouseadjustment=0;
          else if(mouseadjustment>9) mouseadjustment=9;
 diff --git a/wl_play.c b/wl_play.c
-index 4bc2a13..ccba2ff 100644
+index 4bc2a13..98cf24b 100644
 --- a/wl_play.c
 +++ b/wl_play.c
 @@ -61,8 +61,9 @@ int buttonjoy[32] = {
@@ -236,3 +257,38 @@ index 4bc2a13..ccba2ff 100644
  #endif
      bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton,
      bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton, bt_nobutton
+@@ -352,16 +353,30 @@ void PollMouseMove (void)
+ 
+ void PollJoystickMove (void)
+ {
++    static unsigned turnheld;
+     int joyx, joyy;
+ 
+     IN_GetJoyDelta (&joyx, &joyy);
+ 
+     int delta = buttonstate[bt_run] ? RUNMOVE * tics : BASEMOVE * tics;
++    int right = joyx > 64 || buttonstate[bt_turnright];
++    int left = joyx < -64 || buttonstate[bt_turnleft];
++    int turn = delta;
+ 
+-    if (joyx > 64 || buttonstate[bt_turnright])
+-        controlx += delta;
+-    else if (joyx < -64  || buttonstate[bt_turnleft])
+-        controlx -= delta;
++    // The d-pad turns slower than it strafes, at half speed for the first
++    // tics like DOOM so a tap can aim
++    if (!buttonstate[bt_strafe])
++    {
++        turnheld = right || left ? turnheld + tics : 0;
++        turn = (buttonstate[bt_run] ? RUNTURN : BASETURN) * tics;
++        if (turnheld < SLOWTURNTICS)
++            turn /= 2;
++    }
++
++    if (right)
++        controlx += turn;
++    else if (left)
++        controlx -= turn;
+     if (joyy > 64 || buttonstate[bt_movebackward])
+         controly += delta;
+     else if (joyy < -64 || buttonstate[bt_moveforward])

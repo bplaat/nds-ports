@@ -8,22 +8,24 @@ status bar, a map of the explored level with the walls in the colors of
 their textures, the doors in the colors of their keys and the items seen,
 with the floor, time and the kills, treasure and secrets, and a cell for
 each weapon with its sprite in color, the machine guns as picked up, the
-knife and pistol as held, dark until it is picked up. The map is
-redrawn every other frame at most, DMA copies the parts that changed.
+knife and pistol as held, dark until it is picked up. The map is a
+bitmap background of its own below the rest, which is scrolled on vblank
+to follow the player and shown in its panel by a window, only the tiles
+that change are drawn into it. DMA copies the other parts that changed.
 Tapping a cell selects the weapon. Outside of a game it shows BJ and the
 controls. The lid puts the DS to sleep, the DSi power button or
 L+R+START+SELECT quit.
 ---
- nds/wl_touch.c | 705 +++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 705 insertions(+)
+ nds/wl_touch.c | 852 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 852 insertions(+)
  create mode 100644 nds/wl_touch.c
 
 diff --git a/nds/wl_touch.c b/nds/wl_touch.c
 new file mode 100644
-index 0000000..ea1e6e7
+index 0000000..981e5ea
 --- /dev/null
 +++ b/nds/wl_touch.c
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,852 @@
 +//
 +// The Nintendo DS touch screen for Wolf4SDL
 +//
@@ -59,7 +61,9 @@ index 0000000..ea1e6e7
 +#define MAP_W       (SUB_WIDTH - 16)
 +#define MAP_H       112
 +#define MAP_TEXT_H  12          // the lines over the top and bottom of the map
-+#define MAP_ZOOM    4           // pixels per tile
++#define MAP_ZOOM    4           // pixels per tile, a word of VRAM per row
++#define MAP_ARROW_X (MAP_X + MAP_W / 2)
++#define MAP_ARROW_Y (MAP_Y + MAP_H / 2)
 +
 +// The weapon cells, raised boxes like those of the status bar
 +#define CELLS_Y     (MAP_Y + MAP_H + 2)
@@ -83,15 +87,33 @@ index 0000000..ea1e6e7
 +#define COL_GREEN       0x63
 +#define COL_DOOR        0x79
 +
++// The touch screen is drawn here and copied to a bitmap background, color 0
++// is transparent. The whole level map is a 256x256 bitmap background below
++// it, scrolled to follow the player and shown in the map panel only by a
++// window. Only the tiles that change are drawn into it.
 +static byte sub_fb[SUB_WIDTH * SUB_HEIGHT] __attribute__((aligned(32)));
-+static bool sub_ready, help_shown, map_skip;
-+static unsigned status_hash, cells_hash;
++#define MAP_VRAM    ((u32 *) BG_BMP_RAM_SUB (4))
++static bool sub_ready;
++static enum { SHOWS_NOTHING, SHOWS_HELP, SHOWS_GAME } sub_shows;
++static unsigned status_hash, cells_hash, texts_hash;
 +static int touch_cell = -1;
 +
 +// Tiles seen this level, and the level they belong to
 +static bool seen[MAPSIZE][MAPSIZE];
 +static int seen_level = -1;
 +static int32_t seen_time;
++
++// What the map shows: the colors of the items on the tiles, how far the
++// doors are open, the statics, whether the pushwall moved and where the
++// player looks, -1 when not shown yet
++static byte items[MAPSIZE][MAPSIZE];
++static int8_t door_open[MAXDOORS];
++static short stat_shapes[MAXSTATS];
++static int stat_count = -1, pwall_shown = -1, arrow_angle = -1;
++static bool map_viewed;
++// The scroll of the map, set on vblank: written while the screen is drawn
++// the rest of it would be offset by the lines drawn already
++static volatile s32 map_scroll_x, map_scroll_y;
 +
 +static byte wall_colors[64];
 +static byte dark_xlat[256];
@@ -127,10 +149,13 @@ index 0000000..ea1e6e7
 +    return best;
 +}
 +
++// The touch screen is dark while it switches from the console to the
++// bitmaps, until they hold the first screen
 +static void InitSubScreen (void)
 +{
 +    int i;
 +
++    setBrightness (2, -16);
 +    for (i = 0; i < 256; ++i)
 +    {
 +        BG_PALETTE_SUB[i] = RGB15 (gamepal[i].r >> 3, gamepal[i].g >> 3, gamepal[i].b >> 3);
@@ -138,8 +163,29 @@ index 0000000..ea1e6e7
 +    }
 +    videoSetModeSub (MODE_5_2D);
 +    vramSetBankC (VRAM_C_SUB_BG);
-+    bgInitSub (3, BgType_Bmp8, BgSize_B8_256x256, 0, 0);
++    bgSetPriority (bgInitSub (3, BgType_Bmp8, BgSize_B8_256x256, 0, 0), 0);
++    bgSetPriority (bgInitSub (2, BgType_Bmp8, BgSize_B8_256x256, 4, 0), 1);
++    REG_BG2PA_SUB = REG_BG2PD_SUB = 1 << 8;
++    REG_BG2PB_SUB = REG_BG2PC_SUB = 0;
++    SUB_WIN0_X0 = MAP_X;
++    SUB_WIN0_X1 = MAP_X + MAP_W;
++    SUB_WIN0_Y0 = MAP_Y;
++    SUB_WIN0_Y1 = MAP_Y + MAP_H;
++    SUB_WIN_IN = BIT (2) | BIT (3);
++    SUB_WIN_OUT = BIT (3);
++    REG_DISPCNT_SUB = (REG_DISPCNT_SUB & ~DISPLAY_BG2_ACTIVE) | DISPLAY_WIN0_ON;
 +    sub_ready = true;
++}
++
++static void ShowSubScreen (void)
++{
++    static bool shown;
++
++    if (shown)
++        return;
++    dmaBusyWait (VRAM_DMA);
++    setBrightness (2, 0);
++    shown = true;
 +}
 +
 +static void FillRect (int x, int y, int w, int h, byte color)
@@ -416,40 +462,62 @@ index 0000000..ea1e6e7
 +    return x >= 0 && x < MAPSIZE && y >= 0 && y < MAPSIZE && seen[x][y];
 +}
 +
-+// Adds the tiles in view, returns whether any were new
-+static bool UpdateSeen (void)
++// A rectangle in a tile, x and y in pixels of the tile
++static void TileRect (u32 *rows, int x, int y, int w, int h, byte color)
 +{
-+    int level = gamestate.episode * 10 + gamestate.mapon;
-+    uint32_t *dest = (uint32_t *) seen, changed = 0;
-+    const uint32_t *src = (const uint32_t *) spotvis;
-+    int i;
-+
-+    // A new level, or the same one again
-+    if (level != seen_level || gamestate.TimeCount < seen_time)
-+    {
-+        memset (seen, 0, sizeof(seen));
-+        seen_level = level;
-+        changed = 1;
-+    }
-+    seen_time = gamestate.TimeCount;
-+    seen[player->tilex][player->tiley] = true;
-+    for (i = 0; i < MAPAREA / 4; ++i)
-+    {
-+        changed |= src[i] & ~dest[i];
-+        dest[i] |= src[i];
-+    }
-+    return changed != 0;
++    for (; h > 0; --h, ++y)
++        memset ((byte *) &rows[y] + x, color, w);
 +}
 +
-+// A rectangle clipped to the map panel
-+static void MapRect (int x, int y, int w, int h, byte color)
++// Draws a tile into the map: walls in the colors of their textures, doors in
++// the colors of their keys, the floor and the items seen
++static void DrawTile (int tx, int ty)
 +{
-+    if (x < MAP_X) { w -= MAP_X - x; x = MAP_X; }
-+    if (y < MAP_Y) { h -= MAP_Y - y; y = MAP_Y; }
-+    if (x + w > MAP_X + MAP_W) w = MAP_X + MAP_W - x;
-+    if (y + h > MAP_Y + MAP_H) h = MAP_Y + MAP_H - y;
-+    if (w > 0 && h > 0)
-+        FillRect (x, y, w, h, color);
++    const int z = MAP_ZOOM;
++    int tile = tilemap[tx][ty], y;
++    bool near = Seen (tx, ty) || Seen (tx - 1, ty) || Seen (tx + 1, ty) || Seen (tx, ty - 1) || Seen (tx, ty + 1);
++    u32 rows[MAP_ZOOM] = { 0 };
++    u32 *dest = MAP_VRAM + ty * z * (SUB_WIDTH / 4) + tx;
++
++    if (tile & BIT_DOOR)
++    {
++        const doorobj_t *door = &doorobjlist[tile & ~BIT_DOOR];
++        byte color = door->lock == dr_lock1 ? COL_GOLD : door->lock == dr_lock2 ? COL_SILVER : COL_DOOR;
++        // remembered to see when it moved
++        int open = door_open[tile & ~BIT_DOOR] = z * door->position >> 16;
++
++        if (near)
++        {
++            TileRect (rows, 0, 0, z, z, COL_FLOOR);
++            // A bar across the tile, shorter as the door opens
++            if (door->vertical)
++                TileRect (rows, z / 2 - z / 8 - 1, 0, MAX (z / 4, 1) + 1, z - open, color);
++            else
++                TileRect (rows, 0, z / 2 - z / 8 - 1, z - open, MAX (z / 4, 1) + 1, color);
++        }
++    }
++    else if (tile)
++    {
++        if (near)
++            TileRect (rows, 0, 0, z, z, WallColor (tile == BIT_WALL ? pwalltile : tile & ~BIT_WALL));
++    }
++    else if (seen[tx][ty])
++        TileRect (rows, 0, 0, z, z, COL_FLOOR);
++
++    if (items[tx][ty] && seen[tx][ty])
++        TileRect (rows, (z - (z / 4 + 1)) / 2, (z - (z / 4 + 1)) / 2, z / 4 + 1, z / 4 + 1, items[tx][ty]);
++
++    for (y = 0; y < z; ++y, dest += SUB_WIDTH / 4)
++        *dest = rows[y];
++}
++
++static void DrawTileAndAround (int tx, int ty)
++{
++    int x, y;
++
++    for (x = MAX (tx - 1, 0); x <= MIN (tx + 1, MAPSIZE - 1); ++x)
++        for (y = MAX (ty - 1, 0); y <= MIN (ty + 1, MAPSIZE - 1); ++y)
++            DrawTile (x, y);
 +}
 +
 +// The color of an item on the map: treasure gold, health green, keys in
@@ -471,17 +539,110 @@ index 0000000..ea1e6e7
 +        case bo_fullheal:
 +            return COL_BLUE_HI;
 +        default:
-+            return -1;
++            return 0;
 +    }
 +}
 +
-+// The player, an arrowhead about a tile and a half long pointing where they
-+// look
-+static void DrawPlayerArrow (int cx, int cy)
++// Draws the tiles whose items were picked up or dropped
++static void UpdateItems (void)
++{
++    static byte shown[MAPSIZE][MAPSIZE];
++    const u32 *old = (const u32 *) shown, *now = (const u32 *) items;
++    statobj_t *stat;
++    int i, b;
++
++    // Items picked up get no shape, dropped ones take a free place or
++    // lengthen the list
++    if (laststatobj - statobjlist == stat_count)
++    {
++        for (stat = &statobjlist[0]; stat != laststatobj; ++stat)
++            if (stat->shapenum != stat_shapes[stat - statobjlist])
++                break;
++        if (stat == laststatobj)
++            return;
++    }
++
++    memcpy (shown, items, sizeof(items));
++    memset (items, 0, sizeof(items));
++    for (stat = &statobjlist[0]; stat != laststatobj; ++stat)
++    {
++        stat_shapes[stat - statobjlist] = stat->shapenum;
++        if (stat->shapenum >= 0 && (stat->flags & FL_BONUS))
++            items[stat->tilex][stat->tiley] = ItemColor (stat->itemnumber);
++    }
++    stat_count = laststatobj - statobjlist;
++
++    for (i = 0; i < MAPAREA / 4; ++i)
++        if (old[i] != now[i])
++            for (b = 0; b < 4; ++b)
++                if (((const byte *) &old[i])[b] != ((const byte *) &now[i])[b])
++                    DrawTile ((i * 4 + b) / MAPSIZE, (i * 4 + b) % MAPSIZE);
++}
++
++// Adds the tiles in view and draws the new ones and the walls around them
++static void UpdateSeen (void)
++{
++    int level = gamestate.episode * 10 + gamestate.mapon;
++    u32 *dest = (u32 *) seen;
++    const u32 *src = (const u32 *) spotvis;
++    int i, b;
++
++    // A new level, or the same one again: an empty map
++    if (level != seen_level || gamestate.TimeCount < seen_time)
++    {
++        memset (seen, 0, sizeof(seen));
++        memset (items, 0, sizeof(items));
++        memset (door_open, -1, sizeof(door_open));
++        stat_count = -1;
++        memset (MAP_VRAM, 0, MAPSIZE * MAP_ZOOM * SUB_WIDTH);
++        seen_level = level;
++    }
++    seen_time = gamestate.TimeCount;
++    if (!seen[player->tilex][player->tiley])
++    {
++        seen[player->tilex][player->tiley] = true;
++        DrawTileAndAround (player->tilex, player->tiley);
++    }
++    for (i = 0; i < MAPAREA / 4; ++i)
++    {
++        u32 added = src[i] & ~dest[i];
++
++        if (!added)
++            continue;
++        dest[i] |= added;
++        for (b = 0; b < 4; ++b)
++            if (((const byte *) &added)[b])
++                DrawTileAndAround ((i * 4 + b) / MAPSIZE, (i * 4 + b) % MAPSIZE);
++    }
++}
++
++// Draws the doors that moved and the tiles the pushwall moves through
++static void UpdateMoving (void)
++{
++    doorobj_t *door;
++    int x, y;
++
++    for (door = &doorobjlist[0]; door != lastdoorobj; ++door)
++        if (MAP_ZOOM * door->position >> 16 != door_open[door - doorobjlist])
++            DrawTile (door->tilex, door->tiley);
++
++    if (pwallstate || pwall_shown >= 0)
++    {
++        for (x = MAX (pwallx - 2, 0); x <= MIN (pwallx + 2, MAPSIZE - 1); ++x)
++            for (y = MAX (pwally - 2, 0); y <= MIN (pwally + 2, MAPSIZE - 1); ++y)
++                DrawTile (x, y);
++        pwall_shown = pwallstate ? 1 : -1;
++    }
++}
++
++// The player in the middle of the map, an arrowhead about a tile and a half
++// long pointing where they look
++static void DrawPlayerArrow (void)
 +{
 +    fixed c = costable[player->angle], sn = sintable[player->angle];
 +    int y, x;
 +
++    FillRect (MAP_ARROW_X - MAP_ZOOM, MAP_ARROW_Y - MAP_ZOOM, 2 * MAP_ZOOM + 1, 2 * MAP_ZOOM + 1, 0);
 +    for (y = -MAP_ZOOM; y <= MAP_ZOOM; ++y)
 +    {
 +        for (x = -MAP_ZOOM; x <= MAP_ZOOM; ++x)
@@ -495,67 +656,9 @@ index 0000000..ea1e6e7
 +            // narrowing to the tip
 +            if (abs (s) * 2 > len - f)
 +                continue;
-+            if (cx + x >= MAP_X && cx + x < MAP_X + MAP_W && cy + y >= MAP_Y && cy + y < MAP_Y + MAP_H)
-+                sub_fb[(cy + y) * SUB_WIDTH + cx + x] = abs (s) * 4 > len - f ? COL_GOLD : COL_RED;
++            sub_fb[(MAP_ARROW_Y + y) * SUB_WIDTH + MAP_ARROW_X + x] = abs (s) * 4 > len - f ? COL_GOLD : COL_RED;
 +        }
 +    }
-+}
-+
-+// The explored part of the level around the player, walls in the colors of
-+// their textures, doors in the colors of their keys, the items seen
-+static void DrawMap (void)
-+{
-+    int z = MAP_ZOOM;
-+    int px = (player->x * z) >> TILESHIFT, py = (player->y * z) >> TILESHIFT;
-+    int left = px - MAP_W / 2 - MAP_X, top = py - MAP_H / 2 - MAP_Y;
-+    int tx0 = MAX ((left + MAP_X) / z, 0), tx1 = MIN ((left + MAP_X + MAP_W) / z + 1, MAPSIZE);
-+    int ty0 = MAX ((top + MAP_Y) / z, 0), ty1 = MIN ((top + MAP_Y + MAP_H) / z + 1, MAPSIZE);
-+    int tx, ty;
-+    statobj_t *stat;
-+
-+    FillRect (MAP_X, MAP_Y, MAP_W, MAP_H, COL_BLACK);
-+    for (tx = tx0; tx < tx1; ++tx)
-+    {
-+        for (ty = ty0; ty < ty1; ++ty)
-+        {
-+            int tile = tilemap[tx][ty], x = tx * z - left, y = ty * z - top;
-+            bool near = Seen (tx, ty) || Seen (tx - 1, ty) || Seen (tx + 1, ty) || Seen (tx, ty - 1) || Seen (tx, ty + 1);
-+
-+            if (tile & BIT_DOOR)
-+            {
-+                const doorobj_t *door = &doorobjlist[tile & ~BIT_DOOR];
-+                byte color = door->lock == dr_lock1 ? COL_GOLD : door->lock == dr_lock2 ? COL_SILVER : COL_DOOR;
-+                int open = z * door->position >> 16;
-+
-+                if (!near)
-+                    continue;
-+                MapRect (x, y, z, z, COL_FLOOR);
-+                // A bar across the tile, shorter as the door opens
-+                if (door->vertical)
-+                    MapRect (x + z / 2 - z / 8 - 1, y, MAX (z / 4, 1) + 1, z - open, color);
-+                else
-+                    MapRect (x, y + z / 2 - z / 8 - 1, z - open, MAX (z / 4, 1) + 1, color);
-+            }
-+            else if (tile)
-+            {
-+                if (near)
-+                    MapRect (x, y, z, z, WallColor (tile == BIT_WALL ? pwalltile : tile & ~BIT_WALL));
-+            }
-+            else if (seen[tx][ty])
-+                MapRect (x, y, z, z, COL_FLOOR);
-+        }
-+    }
-+
-+    for (stat = &statobjlist[0]; stat != laststatobj; ++stat)
-+    {
-+        int color = stat->shapenum >= 0 && (stat->flags & FL_BONUS) ? ItemColor (stat->itemnumber) : -1;
-+        int size = z / 4 + 1;
-+
-+        if (color >= 0 && seen[stat->tilex][stat->tiley])
-+            MapRect (stat->tilex * z - left + (z - size) / 2, stat->tiley * z - top + (z - size) / 2, size, size, color);
-+    }
-+
-+    DrawPlayerArrow (px - left, py - top);
 +}
 +
 +// The floor and time over the top of the map, the ratios over its bottom
@@ -565,6 +668,8 @@ index 0000000..ea1e6e7
 +    int32_t secs = gamestate.TimeCount / 70;
 +    int time_x, y = MAP_Y + MAP_H - MAP_TEXT_H, i;
 +
++    FillRect (MAP_X, MAP_Y, MAP_W, MAP_TEXT_H, 0);
++    FillRect (MAP_X, y, MAP_W, MAP_TEXT_H, 0);
 +    snprintf (buf, sizeof(buf), "%ld:%02ld", (long) (secs / 60), (long) (secs % 60));
 +    time_x = MAP_X + MAP_W - 4 - TextWidth (buf, 0);
 +    DrawText (time_x, MAP_Y + 2, buf, 0, COL_WHITE, MAP_X + MAP_W);
@@ -596,6 +701,20 @@ index 0000000..ea1e6e7
 +            x += widths[i] + (MAP_W - 8 - total) / 2;
 +        }
 +    }
++}
++
++static unsigned TextsHash (void)
++{
++    unsigned h = gamestate.TimeCount / 70;
++
++    h = h * 33 + gamestate.episode * 10 + gamestate.mapon;
++    h = h * 33 + gamestate.killcount;
++    h = h * 33 + gamestate.killtotal;
++    h = h * 33 + gamestate.treasurecount;
++    h = h * 33 + gamestate.treasuretotal;
++    h = h * 33 + gamestate.secretcount;
++    h = h * 33 + gamestate.secrettotal;
++    return h | 1;
 +}
 +
 +// ---------------------------------------------------------------------------
@@ -654,35 +773,58 @@ index 0000000..ea1e6e7
 +    // Also while dying, which happens after the level ended
 +    if (player == NULL || !(ingame || (playstate == ex_died && gamestate.lives >= 0)))
 +    {
-+        if (!help_shown)
++        if (sub_shows != SHOWS_HELP)
 +        {
++            REG_DISPCNT_SUB &= ~DISPLAY_BG2_ACTIVE;
 +            DrawHelpScreen ();
 +            CopyToVRAM (0, SUB_HEIGHT);
-+            help_shown = true;
++            sub_shows = SHOWS_HELP;
 +        }
++        ShowSubScreen ();
 +        return;
 +    }
-+    if (help_shown)
++    if (sub_shows != SHOWS_GAME)
 +    {
 +        // The frame around the map and cells
 +        FillRect (0, STATUSLINES, SUB_WIDTH, SUB_HEIGHT - STATUSLINES, COL_TEAL);
 +        DrawBox (MAP_X - 1, MAP_Y - 1, MAP_W + 2, MAP_H + 2, COL_BLACK, COL_TEAL_HI, COL_BLACK, false);
 +        CopyToVRAM (STATUSLINES, SUB_HEIGHT - STATUSLINES);
-+        help_shown = false;
-+        status_hash = cells_hash = 0;
-+        map_skip = false;
++        REG_DISPCNT_SUB |= DISPLAY_BG2_ACTIVE;
++        sub_shows = SHOWS_GAME;
++        status_hash = cells_hash = texts_hash = 0;
++        arrow_angle = -1;
 +    }
 +
-+    // The map is redrawn every other frame at most, that is quick enough
-+    if (UpdateSeen () || !map_skip)
++    // The map follows the player. Loading a game changes the level under the
++    // tiles drawn already, so all of them are drawn anew as the view comes
++    // on screen.
++    UpdateSeen ();
++    if (viewonscreen && !map_viewed)
 +    {
-+        DrawMap ();
-+        DrawMapTexts ();
-+        CopyToVRAM (MAP_Y, MAP_H);
-+        map_skip = true;
++        int tx, ty;
++
++        for (tx = 0; tx < MAPSIZE; ++tx)
++            for (ty = 0; ty < MAPSIZE; ++ty)
++                DrawTile (tx, ty);
 +    }
-+    else
-+        map_skip = false;
++    map_viewed = viewonscreen;
++    UpdateItems ();
++    UpdateMoving ();
++    map_scroll_x = (((player->x * MAP_ZOOM) >> TILESHIFT) - MAP_ARROW_X) << 8;
++    map_scroll_y = (((player->y * MAP_ZOOM) >> TILESHIFT) - MAP_ARROW_Y) << 8;
++    if (player->angle != arrow_angle)
++    {
++        arrow_angle = player->angle;
++        DrawPlayerArrow ();
++        CopyToVRAM (MAP_ARROW_Y - MAP_ZOOM, 2 * MAP_ZOOM + 1);
++    }
++    if ((hash = TextsHash ()) != texts_hash)
++    {
++        texts_hash = hash;
++        DrawMapTexts ();
++        CopyToVRAM (MAP_Y, MAP_TEXT_H);
++        CopyToVRAM (MAP_Y + MAP_H - MAP_TEXT_H, MAP_TEXT_H);
++    }
 +
 +    if ((hash = StatusHash ()) != status_hash)
 +    {
@@ -697,6 +839,13 @@ index 0000000..ea1e6e7
 +            DrawCell (i);
 +        CopyToVRAM (CELLS_Y, CELL_H);
 +    }
++    ShowSubScreen ();
++}
++
++void NDS_SubScreenVBlank (void)
++{
++    REG_BG2X_SUB = map_scroll_x;
++    REG_BG2Y_SUB = map_scroll_y;
 +}
 +
 +// ---------------------------------------------------------------------------
