@@ -18,12 +18,12 @@ fork of Chocolate Doom, to the Nintendo DS and DSi.
 
 The top screen only shows the view. The touch screen shows the classic status
 bar at the top, the map in the middle, following you, with the level name,
-time, kills, items and secrets, and at the bottom stone cells like the status
-bar's: the weapons, with their pickup picture (the fist and pistol as held,
-scaled down), dark until you have them, slot number and ammo, and the status
-bar's ammo table. Tap a weapon to select it. The shareware has no plasma rifle
-and BFG, those show their name. Outside of a level and while Options is open
-the touch screen shows the controls.
+time and the kills, items and secrets as percentages, and at the bottom stone
+cells like the status bar's: the weapons, with their pickup picture (the fist
+and pistol as held, scaled down), dark until you have them, slot number and
+ammo, and the status bar's ammo table. Tap a weapon to select it. The
+shareware has no plasma rifle and BFG, those show their name. Outside of a
+level and while Options is open the touch screen shows the controls.
 
 Closing the lid puts the console to sleep. L+R+START+SELECT, or the DSi power
 button, quits.
@@ -97,7 +97,8 @@ code is written for the DS only, without `__NDS__` checks.
   Prompts ask for A and B instead of Y and N, and Enter and Backspace (which
   A and B send) answer them.
 - [0005](patches/0005-Name-savegames-after-the-level.patch): Savegames
-  are named after the level, eg. "E1M3: Toxin Refinery".
+  are named after the level, eg. "E1M3: Toxin Refinery", including quicksave
+  overwrites.
 - [0006](patches/0006-Refuse-saving-without-writable-storage.patch):
   Without an SD card, Save Game and Quick Save show a message instead of
   ending the game with an `I_Error`.

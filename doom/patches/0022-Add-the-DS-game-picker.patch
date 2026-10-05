@@ -23,7 +23,7 @@ Also the doomgeneric interface: timing from the calico tick counter.
 
 diff --git a/doomgeneric/doomgeneric_nds.c b/doomgeneric/doomgeneric_nds.c
 new file mode 100644
-index 0000000..522ea23
+index 0000000..1b98bac
 --- /dev/null
 +++ b/doomgeneric/doomgeneric_nds.c
 @@ -0,0 +1,644 @@
@@ -562,7 +562,7 @@ index 0000000..522ea23
 +    }
 +    MakeDataDir();
 +    if (chdir(DATA_DIR) != 0)
-+        printf("\x1b[33;1m  Can't open " DATA_DIR ",\n  saving is off\x1b[39;0m\n");
++        printf("\x1b[33;1m  Can't write the SD card,\n  saving is off\x1b[39;0m\n");
 +}
 +
 +// ---------------------------------------------------------------------------

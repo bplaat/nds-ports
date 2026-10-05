@@ -11,7 +11,7 @@ and show a message, so you can keep playing.
  1 file changed, 33 insertions(+)
 
 diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
-index 7de81eb..a6124ad 100644
+index d4e1ceb..88ae445 100644
 --- a/doomgeneric/m_menu.c
 +++ b/doomgeneric/m_menu.c
 @@ -20,6 +20,7 @@

@@ -12,18 +12,18 @@ runs at 35 tics a second. Outside of a level and with the settings open
 it shows the logo and the controls. Changed rows are copied to VRAM by
 DMA.
 ---
- doomgeneric/i_ndstouch.c | 694 +++++++++++++++++++++++++++++++++++++++
+ doomgeneric/i_ndstouch.c | 717 +++++++++++++++++++++++++++++++++++++++
  doomgeneric/m_menu.c     |   6 +
  doomgeneric/m_menu.h     |   3 +
- 3 files changed, 703 insertions(+)
+ 3 files changed, 726 insertions(+)
  create mode 100644 doomgeneric/i_ndstouch.c
 
 diff --git a/doomgeneric/i_ndstouch.c b/doomgeneric/i_ndstouch.c
 new file mode 100644
-index 0000000..0703b27
+index 0000000..d8fec07
 --- /dev/null
 +++ b/doomgeneric/i_ndstouch.c
-@@ -0,0 +1,694 @@
+@@ -0,0 +1,717 @@
 +//
 +// Nintendo DS touch screen
 +//
@@ -562,9 +562,32 @@ index 0000000..0703b27
 +    DrawText(time_x, MAP_Y + 3, buf, xlat_white, SUB_WIDTH);
 +    DrawText(4, MAP_Y + 3, HU_LevelTitle(), xlat_gold, time_x - 8);
 +
-+    snprintf(buf, sizeof(buf), "K %d/%d  I %d/%d  S %d/%d", player->killcount, totalkills,
-+             player->itemcount, totalitems, player->secretcount, totalsecret);
-+    DrawText(4, MAP_Y + MAP_HEIGHT - 10, buf, xlat_white, SUB_WIDTH);
++    // The three percentages of the intermission, spread over the width
++    {
++        static const char *const labels[3] = { "Kills", "Items", "Secrets" };
++        const int counts[3][2] =
++        {
++            { player->killcount, totalkills },
++            { player->itemcount, totalitems },
++            { player->secretcount, totalsecret },
++        };
++        char values[3][16];
++        int widths[3], total = 0, x = 4, i;
++
++        for (i = 0; i < 3; ++i)
++        {
++            snprintf(values[i], sizeof(values[i]), "%d%%",
++                     counts[i][1] ? counts[i][0] * 100 / counts[i][1] : 100);
++            widths[i] = TextWidth(labels[i]) + 3 + TextWidth(values[i]);
++            total += widths[i];
++        }
++        for (i = 0; i < 3; ++i)
++        {
++            DrawText(x, MAP_Y + MAP_HEIGHT - 10, labels[i], xlat_gold, SUB_WIDTH);
++            DrawText(x + widths[i] - TextWidth(values[i]), MAP_Y + MAP_HEIGHT - 10, values[i], xlat_white, SUB_WIDTH);
++            x += widths[i] + (SUB_WIDTH - 8 - total) / 2;
++        }
++    }
 +}
 +
 +// The view border's flat at a light level of COLORMAP
@@ -719,7 +742,7 @@ index 0000000..0703b27
 +    }
 +}
 diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
-index f487c91..0291536 100644
+index e465f04..f6f886b 100644
 --- a/doomgeneric/m_menu.c
 +++ b/doomgeneric/m_menu.c
 @@ -916,6 +916,12 @@ void M_DrawMainMenu(void)

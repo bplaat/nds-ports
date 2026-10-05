@@ -13,7 +13,7 @@ graphic detail, screen size or mouse sensitivity.
  1 file changed, 12 insertions(+), 33 deletions(-)
 
 diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
-index a6124ad..934acaa 100644
+index 88ae445..a5ad56e 100644
 --- a/doomgeneric/m_menu.c
 +++ b/doomgeneric/m_menu.c
 @@ -232,32 +232,34 @@ void M_ClearMenus (void);

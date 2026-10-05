@@ -232,7 +232,7 @@ index 04e34ba..264fe9a 100644
  }
  
 diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
-index 0b74260..098e9a6 100644
+index e48813e..f0588f2 100644
 --- a/doomgeneric/m_menu.c
 +++ b/doomgeneric/m_menu.c
 @@ -1301,6 +1301,43 @@ M_DrawSelCell

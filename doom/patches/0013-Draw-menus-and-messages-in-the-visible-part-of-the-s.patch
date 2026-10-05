@@ -45,7 +45,7 @@ index bb58e0f..cce0bc3 100644
  #define HU_MSGHEIGHT	1	// in lines
  
 diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
-index 934acaa..0b74260 100644
+index a5ad56e..e48813e 100644
 --- a/doomgeneric/m_menu.c
 +++ b/doomgeneric/m_menu.c
 @@ -118,7 +118,9 @@ char			saveOldString[SAVESTRINGSIZE];
