@@ -46,7 +46,7 @@ index e88c4e2..44e1e4e 100644
      SD_SetSoundMode (sd);
      SD_SetDigiDevice (sds);
 diff --git a/wl_menu.c b/wl_menu.c
-index de012eb..38c2469 100644
+index 0cce49e..a62f36f 100644
 --- a/wl_menu.c
 +++ b/wl_menu.c
 @@ -30,7 +30,7 @@ void SetTextColor (CP_itemtype *items, int hlight);

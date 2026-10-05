@@ -110,10 +110,10 @@ index 6cab64e..70b7697 100644
      VWB_BarScaledCoord (0,0,screenWidth,screenHeight-px*STATUSLINES,bordercol);
  
 diff --git a/wl_inter.c b/wl_inter.c
-index d25bc8b..7966c5b 100644
+index bcbea3f..d848c6a 100644
 --- a/wl_inter.c
 +++ b/wl_inter.c
-@@ -946,15 +946,17 @@ PreloadGraphics (void)
+@@ -947,15 +947,17 @@ PreloadGraphics (void)
      DrawLevel ();
      ClearSplitVWB ();           // set up for double buffering in split screen
  

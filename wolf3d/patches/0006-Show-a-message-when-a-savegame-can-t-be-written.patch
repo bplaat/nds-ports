@@ -11,45 +11,45 @@ slot keeps its old name and state.
  1 file changed, 15 insertions(+), 3 deletions(-)
 
 diff --git a/wl_menu.c b/wl_menu.c
-index 9d898a1..de012eb 100644
+index 24950b6..0cce49e 100644
 --- a/wl_menu.c
 +++ b/wl_menu.c
-@@ -1527,6 +1527,8 @@ CP_SaveGame (int quick)
+@@ -1529,6 +1529,8 @@ CP_SaveGame (int quick)
  
              unlink (savepath);
              file = fopen (savepath, "wb");
 +            if (!file)
 +                return 0;
  
-             snprintf (input,sizeof(input),"%s",SaveGameNames[which]);
+             snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
  
-@@ -1590,9 +1592,6 @@ CP_SaveGame (int quick)
-                 (LSM_X + LSItems.indent + 2, LSM_Y + which * 13 + 1, input, input, true, 31,
-                  LSM_W - LSItems.indent - 30))
-             {
--                SaveGamesAvail[which] = 1;
--                snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
+@@ -1578,9 +1580,6 @@ CP_SaveGame (int quick)
+ 
+             name[7] = which + '0';
+ 
+-            SaveGamesAvail[which] = 1;
+-            snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
 -
-                 if (configdir[0])
-                     snprintf (savepath, sizeof(savepath), "%s/%s", configdir, name);
-                 else
-@@ -1600,6 +1599,19 @@ CP_SaveGame (int quick)
+             if (configdir[0])
+                 snprintf (savepath, sizeof(savepath), "%s/%s", configdir, name);
+             else
+@@ -1588,6 +1587,19 @@ CP_SaveGame (int quick)
  
-                 unlink (savepath);
-                 file = fopen (savepath, "wb");
-+                if (!file)
-+                {
-+                    SD_PlaySound (NOWAYSND);
-+                    Message ("Unable to save the game!");
-+                    IN_ClearKeysDown ();
-+                    IN_Ack ();
-+                    DrawLoadSaveScreen (1);
-+                    continue;
-+                }
+             unlink (savepath);
+             file = fopen (savepath, "wb");
++            if (!file)
++            {
++                SD_PlaySound (NOWAYSND);
++                Message ("Unable to save the game!");
++                IN_ClearKeysDown ();
++                IN_Ack ();
++                DrawLoadSaveScreen (1);
++                continue;
++            }
 +
-+                SaveGamesAvail[which] = 1;
-+                snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
++            SaveGamesAvail[which] = 1;
++            snprintf (SaveGameNames[which],sizeof(SaveGameNames[which]),"%s",input);
 +
-                 fwrite (input, 32, 1, file);
-                 fseek (file, 32, SEEK_SET);
+             fwrite (input, 32, 1, file);
+             fseek (file, 32, SEEK_SET);
  

@@ -23,22 +23,24 @@ Quit. In a game End Game takes the place of Quit.
 All the sound is always on, the DS volume slider sets the loudness.
 
 The top screen shows the view at 1:1, the menus and pictures are scaled to
-fit. The touch screen looks like the status bar: the status bar itself at
-the top, the map in the middle, following you, with the episode, floor and
-time and the kills, treasure and secrets, and at the bottom a cell for each
-weapon, in color, dark until you have it, the one in your hands in a gold
-frame. Tap a weapon to select it. The map shows the explored part of the
+fit. The touch screen looks like the status bar: the status bar itself at the
+top, the map in the middle, following you, with the episode, floor and time
+and the kills, treasure and secrets as percentages, and at the bottom a cell
+for each weapon, in color, dark until you have it, the one in your hands in a
+gold frame. Tap a weapon to select it. The map shows the explored part of the
 level, the walls in the colors of their textures, the doors in the colors of
-their keys and the items you have seen: treasure gold, health green, ammo
-and weapons gray, extra lives blue. Outside of a game the touch screen shows
-the controls.
+their keys and the items you have seen: treasure gold, health green, ammo and
+weapons gray, extra lives blue. Outside of a game the touch screen shows the
+controls.
 
 Closing the lid puts the console to sleep. L+R+START+SELECT, or the DSi power
 button, quits.
 
-Savegames are named after the episode and floor, also when they replace an
-older one, there is no keyboard to type a name, so saving is pressing A
-twice. To rename one, UP/DOWN change a letter and LEFT/RIGHT move the cursor.
+Nothing asks you to type: savegames are named after the episode and floor,
+also when they replace an older one, so selecting a slot saves right away,
+overwriting an existing save asks for confirmation. Quicksave also updates
+the name to the current level. A new high score gets the user name of the DS
+settings.
 
 ## Building
 
@@ -101,9 +103,10 @@ code is written for the DS only, without `__NDS__` checks.
 
 - [0004](patches/0004-Answer-prompts-with-the-A-and-B-buttons.patch):
   Prompts name the A and B buttons, which answer them, instead of Y and N.
-- [0005](patches/0005-Name-savegames-after-the-level.patch): Savegames
-  are named after the level, eg. "Episode 1 Floor 3", also when they replace
-  an older one.
+- [0005](patches/0005-Name-savegames-and-high-scores-without-typing.patch):
+  Savegames are named after the level, eg. "Episode 1 Floor 3", also when
+  they replace an older one, without a name-editing step. Quicksave updates
+  the name too. A new high score gets the user name of the DS settings.
 - [0006](patches/0006-Show-a-message-when-a-savegame-can-t-be-written.patch):
   Without an SD card saving shows a message instead of crashing.
 - [0007](patches/0007-Trim-the-menus-for-a-handheld-console.patch): No
@@ -154,7 +157,9 @@ it uses, in `nds/`, so its own code is barely changed.
   main RAM.
 - [0014](patches/0014-Add-the-DS-startup.patch): `wl_nds.c` switches the
   ARM9 to 134 MHz in DSi mode, finds the game data in NitroFS and on the SD
-  card, keeps config and saves in `/data/wolf3d/` and reads `args.txt`. As
+  card, keeps config and saves in `/data/wolf3d/` and reads `args.txt`.
+  The touch screen shows a startup like DOOM's and Quake's, in blue, naming
+  the game it loads, the full game or the shareware. As
   soon as the data is found, it shows the title on the top screen while the
   game loads, expanding only its chunk of the graphics. Errors are shown on
   the touch screen.

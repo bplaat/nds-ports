@@ -16,16 +16,16 @@ Tapping a cell selects the weapon. Outside of a game it shows BJ and the
 controls. The lid puts the DS to sleep, the DSi power button or
 L+R+START+SELECT quit.
 ---
- nds/wl_touch.c | 852 +++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 852 insertions(+)
+ nds/wl_touch.c | 853 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 853 insertions(+)
  create mode 100644 nds/wl_touch.c
 
 diff --git a/nds/wl_touch.c b/nds/wl_touch.c
 new file mode 100644
-index 0000000..981e5ea
+index 0000000..4a8ff30
 --- /dev/null
 +++ b/nds/wl_touch.c
-@@ -0,0 +1,852 @@
+@@ -0,0 +1,853 @@
 +//
 +// The Nintendo DS touch screen for Wolf4SDL
 +//
@@ -676,7 +676,7 @@ index 0000000..981e5ea
 +    snprintf (buf, sizeof(buf), "Episode %d  Floor %d", gamestate.episode + 1, gamestate.mapon + 1);
 +    DrawText (MAP_X + 4, MAP_Y + 2, buf, 0, COL_GOLD, time_x - 4);
 +
-+    // The three counts of the intermission, spread over the width
++    // The three ratios of the intermission, spread over the width
 +    {
 +        static const char *const labels[3] = { "Kills", "Treasure", "Secrets" };
 +        const short counts[3][2] =
@@ -690,7 +690,8 @@ index 0000000..981e5ea
 +
 +        for (i = 0; i < 3; ++i)
 +        {
-+            snprintf (values[i], sizeof(values[i]), "%d/%d", counts[i][0], counts[i][1]);
++            snprintf (values[i], sizeof(values[i]), "%d%%",
++                      counts[i][1] ? counts[i][0] * 100 / counts[i][1] : 100);
 +            widths[i] = TextWidth (labels[i], 0) + 3 + TextWidth (values[i], 0);
 +            total += widths[i];
 +        }
