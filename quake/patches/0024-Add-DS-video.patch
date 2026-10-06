@@ -6,7 +6,9 @@ Subject: [PATCH] Add DS video
 vid_nds.c shows the 3D view on the top screen with a text layer over it
 for the messages: Quake's font as 8bpp tiles in VRAM bank F and a 32x24
 map in bank E, with the tiles of the loading plaque, which shows on black
-while a level loads. Edge marking makes the hardware fill the edges of the
+while a level loads, with menu layers hidden and game text cleared. The
+touch screen keeps the startup console until the first level is ready. Edge marking
+makes the hardware fill the edges of the
 3D polygons, which it leaves gaps along otherwise, all with the same
 polygon ID so none is marked, antialiasing blended them with the
 background. The frame is depth tested on w.
@@ -29,8 +31,8 @@ rate.
 ---
  WinQuake/draw.c    |   8 +
  WinQuake/vid.h     |   8 +
- WinQuake/vid_nds.c | 595 +++++++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 611 insertions(+)
+ WinQuake/vid_nds.c | 599 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 615 insertions(+)
  create mode 100644 WinQuake/vid_nds.c
 
 diff --git a/WinQuake/draw.c b/WinQuake/draw.c
@@ -129,10 +131,10 @@ index eeb4139..2f35961 100644
  // the menu draws between them on a transparent background (255), it shows on
 diff --git a/WinQuake/vid_nds.c b/WinQuake/vid_nds.c
 new file mode 100644
-index 0000000..fe51bc5
+index 0000000..6d04a0a
 --- /dev/null
 +++ b/WinQuake/vid_nds.c
-@@ -0,0 +1,595 @@
+@@ -0,0 +1,599 @@
 +/*
 +Copyright (C) 1996-1997 Id Software, Inc.
 +
@@ -374,6 +376,8 @@ index 0000000..fe51bc5
 +	}
 +	if (loading)
 +	{
++		// The plaque owns this layer while loading; discard game text.
++		VID_ClearText ();
 +		if (!plaque_w)
 +			VID_UploadPlaque ();
 +		for (y = 0; y < plaque_h; y++)
@@ -690,12 +694,14 @@ index 0000000..fe51bc5
 +
 +void VID_Update (vrect_t *rects)
 +{
++	qboolean showmenu = !scr_drawloading && (key_dest == key_menu || scr_drawdialog);
++
 +	if (!touchscreen && ((!con_forcedup && !scr_drawloading)
 +		|| (key_dest == key_menu && cls.state == ca_disconnected && cls.demonum == -1)))
 +		VID_InitTouchScreen ();
-+	if (touchscreen && (key_dest == key_menu || scr_drawdialog) != menu_shown)
++	if (touchscreen && showmenu != menu_shown)
 +	{
-+		menu_shown = !menu_shown;
++		menu_shown = showmenu;
 +		VID_SetLayers ();
 +	}
 +	if (vid_showfps.value)

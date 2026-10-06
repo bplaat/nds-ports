@@ -48,7 +48,8 @@ download() {
 }
 
 fetch() {
-    local archive="$BUILD_DIR/$(basename "$source_url")"
+    local archive
+    archive="$BUILD_DIR/$(basename "$source_url")"
     download "$source_url" "$source_sha256" "$archive"
     if [ ! -d "$SRC_DIR" ]; then
         msg "Extracting $(basename "$archive")"
@@ -59,8 +60,9 @@ fetch() {
     archive="$BUILD_DIR/$(basename "$shareware_url")"
     download "$shareware_url" "$shareware_sha256" "$archive"
     mkdir -p "$ASSETS_DIR/id1"
-    unzip -p "$archive" ID1/PAK0.PAK > "$ASSETS_DIR/id1/pak0.pak"
-    echo "$pak0_sha256  $ASSETS_DIR/id1/pak0.pak" | shasum -a 256 -c --status || die "Unexpected pak0.pak"
+    unzip -p "$archive" ID1/PAK0.PAK > "$ASSETS_DIR/id1/pak0.pak.part"
+    echo "$pak0_sha256  $ASSETS_DIR/id1/pak0.pak.part" | shasum -a 256 -c --status || die "Unexpected pak0.pak"
+    mv "$ASSETS_DIR/id1/pak0.pak.part" "$ASSETS_DIR/id1/pak0.pak"
     msg "Added the Quake shareware id1/pak0.pak to assets/"
 }
 

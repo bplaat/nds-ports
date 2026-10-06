@@ -49,6 +49,12 @@ Every port is a self-contained directory:
 | `assets/`   | Game data embedded in the ROM (gitignored, never commit it) |
 | `target/`   | Sources, work files and the resulting ROM (gitignored)      |
 
+All three ports keep settings and savegames directly in
+`/data/<port>/<version>/` on the SD card: Doom uses the WAD filename,
+Quake the game folder (such as `id1`), and Wolf3D the data extension
+(`wl1`, `wl3` or `wl6`). Shared startup files such as `args.txt` stay in
+`/data/<port>/`.
+
 ## Getting Started
 
 - Install [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `nds-dev` group

@@ -69,8 +69,9 @@ root also work). The full game is played when it is found, it has the
 shareware episode too. Spear of Destiny needs a build of its own and isn't
 supported.
 
-With an SD card the config and savegames go to `/data/wolf3d/`. Without one
-you can still play, saving then shows a message instead. Wolf4SDL's command
+With an SD card the config and savegames go to `/data/wolf3d/<extension>/`:
+`wl6/`, `wl3/` or `wl1/` for the loaded version. Without one you can still
+play, saving then shows a message instead. Wolf4SDL's command
 line options such as `--tedlevel 3 --hard` can be put in
 `/data/wolf3d/args.txt`.
 
@@ -160,7 +161,8 @@ it uses, in `nds/`, so its own code is barely changed.
   keyboard, are left out.
 - [0014](patches/0014-Add-the-DS-startup.patch): `wl_nds.c` switches the
   ARM9 to 134 MHz in DSi mode, finds the game data in NitroFS and on the SD
-  card, keeps config and saves in `/data/wolf3d/` and reads `args.txt`.
+  card, keeps config and saves in `/data/wolf3d/<extension>/` and reads
+  `/data/wolf3d/args.txt`.
   The touch screen shows a startup like DOOM's and Quake's, in blue, naming
   the game it loads, the full game or the shareware. As
   soon as the data is found, it shows the title on the top screen while the

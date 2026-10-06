@@ -41,6 +41,7 @@ export PATH="$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH"
 msg() { printf '\033[1;34m[wolf3d]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[wolf3d]\033[0m %s\n' "$*" >&2; exit 1; }
 git_src() { git -C "$SRC_DIR" "$@"; }
+patch_checksum() { (cd "$PORT_DIR" && shasum -a 256 patches/*.patch); }
 
 # Downloads url to dest (unless present) and verifies its sha256
 download() {
@@ -55,28 +56,41 @@ download() {
 }
 
 fetch() {
-    local archive="$BUILD_DIR/$(basename "$source_url")" sha file
+    local archive sha file missing=0
+    archive="$BUILD_DIR/$(basename "$source_url")"
     download "$source_url" "$source_sha256" "$archive"
     if [ ! -d "$SRC_DIR" ]; then
         msg "Extracting $(basename "$archive")"
         tar -xf "$archive" -C "$BUILD_DIR"
     fi
 
-    [ -f "$ASSETS_DIR/vswap.wl1" ] && return
+    while read -r sha file; do
+        [ -n "$file" ] || continue
+        [ -f "$ASSETS_DIR/$file" ] || missing=1
+    done <<< "$shareware_files"
+    [ "$missing" -eq 0 ] && return
     archive="$BUILD_DIR/$(basename "$shareware_url")"
     download "$shareware_url" "$shareware_sha256" "$archive"
     mkdir -p "$ASSETS_DIR"
     while read -r sha file; do
         [ -n "$file" ] || continue
-        unzip -p "$archive" "$(printf '%s' "$file" | tr '[:lower:]' '[:upper:]')" > "$ASSETS_DIR/$file"
-        echo "$sha  $ASSETS_DIR/$file" | shasum -a 256 -c --status || die "Unexpected $file"
+        [ -f "$ASSETS_DIR/$file" ] && continue
+        unzip -p "$archive" "$(printf '%s' "$file" | tr '[:lower:]' '[:upper:]')" > "$ASSETS_DIR/$file.part"
+        echo "$sha  $ASSETS_DIR/$file.part" | shasum -a 256 -c --status || die "Unexpected $file"
+        mv "$ASSETS_DIR/$file.part" "$ASSETS_DIR/$file"
     done <<< "$shareware_files"
     msg "Added the Wolfenstein 3D shareware *.wl1 to assets/"
 }
 
 # Turns the pristine source into a git repo and applies the patches as commits
 patch() {
-    [ -d "$SRC_DIR/.git" ] && return
+    local checksum
+    checksum="$(patch_checksum)"
+    if [ -d "$SRC_DIR/.git" ]; then
+        [ -f "$BUILD_DIR/patches.sha256" ] && [ "$(cat "$BUILD_DIR/patches.sha256")" = "$checksum" ] \
+            || die "Patched sources are outdated or unverified. Run ./build.sh clean then ./build.sh; clean removes development edits in target/."
+        return
+    fi
     msg "Applying patches"
     git_src init -q
     # Deterministic identity so patch commits are reproducible
@@ -89,6 +103,7 @@ patch() {
     if compgen -G "$PORT_DIR/patches/*.patch" > /dev/null; then
         git_src am -q --keep-cr "$PORT_DIR"/patches/*.patch
     fi
+    printf '%s\n' "$checksum" > "$BUILD_DIR/patches.sha256"
 }
 
 # Writes the commits on top of upstream back to patches/
@@ -96,6 +111,7 @@ export_patches() {
     [ -d "$SRC_DIR/.git" ] || die "No patched source tree, run ./build.sh dev first"
     rm -f "$PORT_DIR"/patches/*.patch
     git_src format-patch -q --no-numbered --zero-commit --no-signature -o "$PORT_DIR/patches" upstream..HEAD
+    patch_checksum > "$BUILD_DIR/patches.sha256"
     msg "Exported $(git_src rev-list --count upstream..HEAD) patches"
 }
 

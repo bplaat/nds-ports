@@ -47,7 +47,8 @@ download() {
 }
 
 fetch() {
-    local archive="$BUILD_DIR/$(basename "$source_url")"
+    local archive
+    archive="$BUILD_DIR/$(basename "$source_url")"
     download "$source_url" "$source_sha256" "$archive"
     if [ ! -d "$SRC_DIR" ]; then
         msg "Extracting $(basename "$archive")"
@@ -58,8 +59,9 @@ fetch() {
     archive="$BUILD_DIR/$(basename "$shareware_url")"
     download "$shareware_url" "$shareware_sha256" "$archive"
     mkdir -p "$ASSETS_DIR"
-    tar -xOf "$archive" doom-wad-shareware-1.9.fixed/doom1.wad > "$ASSETS_DIR/doom1.wad"
-    echo "$doom1_sha256  $ASSETS_DIR/doom1.wad" | shasum -a 256 -c --status || die "Unexpected doom1.wad"
+    tar -xOf "$archive" doom-wad-shareware-1.9.fixed/doom1.wad > "$ASSETS_DIR/doom1.wad.part"
+    echo "$doom1_sha256  $ASSETS_DIR/doom1.wad.part" | shasum -a 256 -c --status || die "Unexpected doom1.wad"
+    mv "$ASSETS_DIR/doom1.wad.part" "$ASSETS_DIR/doom1.wad"
     msg "Added the DOOM shareware doom1.wad to assets/"
 }
 

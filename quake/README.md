@@ -33,7 +33,9 @@ open the touch screen keeps showing the game, with the options and while no
 game runs it shows the controls, centered on the console background. While
 Quake starts the touch screen shows its title in brown and loading dots like
 DOOM and Wolf3D, and the top screen the loading plaque, which also shows
-whenever a level loads. Nothing asks you to type: savegames are named after
+whenever a level loads, replacing the menu and game text until loading ends.
+The first load keeps this startup screen. Later loads show the brown console
+background and version on the bottom screen. Nothing asks you to type: savegames are named after
 the level and kills, and the player after the user name of the DS settings.
 
 Closing the lid puts the console to sleep. L+R+START+SELECT, or the DSi power
@@ -64,7 +66,8 @@ always playable, even without an SD card. Add your own `pak1.pak` next to it
 in `assets/id1/` to embed it, or put it in `/data/quake/id1/` on the SD card.
 Both are searched, the SD card last.
 
-With an SD card the config and savegames go to `/data/quake/id1/`, in Quake's
+With an SD card the config and savegames go to `/data/quake/<game>/`
+(`id1/` for the base game, or the mission pack or mod folder), in Quake's
 own format, named after the level, also when they replace an older one.
 Without one you can still play, saving then shows a message. Extra
 command line options such as `-game hipnotic` or `+map e1m2` can be put in

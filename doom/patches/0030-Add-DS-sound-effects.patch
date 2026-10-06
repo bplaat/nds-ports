@@ -5,18 +5,19 @@ Subject: [PATCH] Add DS sound effects
 
 Sound effects are converted once to signed 8-bit PCM and played on
 hardware channels 0-7, the hardware mixer does the resampling, volume and
-stereo panning.
+stereo panning. Invalid DMX sample rates and lengths are rejected before
+the sample is converted or its playback time is calculated.
 ---
- doomgeneric/i_ndssound.c | 222 +++++++++++++++++++++++++++++++++++++++
- 1 file changed, 222 insertions(+)
+ doomgeneric/i_ndssound.c | 223 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 223 insertions(+)
  create mode 100644 doomgeneric/i_ndssound.c
 
 diff --git a/doomgeneric/i_ndssound.c b/doomgeneric/i_ndssound.c
 new file mode 100644
-index 0000000..2844958
+index 0000000..c7f65f0
 --- /dev/null
 +++ b/doomgeneric/i_ndssound.c
-@@ -0,0 +1,222 @@
+@@ -0,0 +1,223 @@
 +//
 +// Nintendo DS sound effects
 +//
@@ -87,8 +88,9 @@ index 0000000..2844958
 +        return NULL;
 +    }
 +    rate = lump[2] | (lump[3] << 8);
-+    length = lump[4] | (lump[5] << 8) | (lump[6] << 16) | (lump[7] << 24);
-+    if (length > lumplen - 8 || length <= 48)
++    length = (uint32_t) lump[4] | ((uint32_t) lump[5] << 8)
++        | ((uint32_t) lump[6] << 16) | ((uint32_t) lump[7] << 24);
++    if (rate == 0 || length > lumplen - 8 || length <= 48)
 +    {
 +        W_ReleaseLumpNum(sfx->lumpnum);
 +        return NULL;

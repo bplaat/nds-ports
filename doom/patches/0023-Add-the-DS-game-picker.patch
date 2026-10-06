@@ -7,7 +7,7 @@ Switches the ARM9 to 134 MHz in DSi mode, then indexes every IWAD and
 mod (PWAD) in NitroFS and on the SD card in a picker on the bottom
 screen console that shows each game's title picture, runs mods on a
 matching IWAD, shows a loading screen and keeps config and saves in
-/data/doom/. A title picture is only drawn when it is a patch with all
+/data/doom/<wad name>/. A title picture is only drawn when it is a patch with all
 of its columns inside the lump, picker lines are cut to one row so a tap
 picks the game it is on. The picker sleeps while the lid is closed and
 exits on the DSi power button or L+R+START+SELECT. Doom then runs in a
@@ -15,9 +15,9 @@ thread with a 64 KiB stack in main RAM: DTCM is mostly taken by the
 light tables, and Doom's deepest recursion grows with the size of a map.
 Also the doomgeneric interface: timing from the calico tick counter.
 ---
- doomgeneric/doomgeneric_nds.c | 652 ++++++++++++++++++++++++++++++++++
- doomgeneric/doomgeneric_nds.h |  31 ++
- 2 files changed, 683 insertions(+)
+ doomgeneric/doomgeneric_nds.c | 657 ++++++++++++++++++++++++++++++++++++++++
+ doomgeneric/doomgeneric_nds.h | 31 +++++++++++++++++++++++++++++++
+ 2 files changed, 688 insertions(+)
  create mode 100644 doomgeneric/doomgeneric_nds.c
  create mode 100644 doomgeneric/doomgeneric_nds.h
 
@@ -26,7 +26,7 @@ new file mode 100644
 index 0000000..066921d
 --- /dev/null
 +++ b/doomgeneric/doomgeneric_nds.c
-@@ -0,0 +1,652 @@
+@@ -0,0 +1,657 @@
 +//
 +// Nintendo DS platform layer for doomgeneric
 +//
@@ -561,16 +561,21 @@ index 0000000..066921d
 +    return &wads[selected];
 +}
 +
-+// Config and savegames go to the data folder on the SD card when one is available
-+static void EnterDataDir(void)
++// Each game or mod keeps its config and savegames in its own SD card folder
++static void EnterDataDir(const wad_entry_t *wad)
 +{
++    char path[sizeof(wad->path) + sizeof(DATA_DIR)];
++    const char *name = strrchr(wad->path, '/');
++
 +    if (!have_fat)
 +    {
 +        printf("\x1b[33;1m  No SD card, saving is off\x1b[39;0m\n");
 +        return;
 +    }
 +    MakeDataDir();
-+    if (chdir(DATA_DIR) != 0)
++    snprintf(path, sizeof(path), "%s/%s", DATA_DIR, name != NULL ? name + 1 : wad->path);
++    mkdir(path, 0777);
++    if (chdir(path) != 0)
 +        printf("\x1b[33;1m  Can't write the SD card,\n  saving is off\x1b[39;0m\n");
 +}
 +
@@ -664,15 +669,15 @@ index 0000000..066921d
 +        doom_argv[doom_argc++] = (char *) wad->path;
 +    }
 +    PrintHeader();
-+    EnterDataDir();
++    EnterDataDir(wad);
 +    printf("\n  Loading %s\n\n  ", wad->title);
 +    fflush(stdout);
 +    SetLoadingOutput(true);
 +
 +    // Extra command line options (eg. -skill 4 -warp 1 3) can be put in
 +    // /data/doom/args.txt, expanded as a Doom response file
-+    if (FileExists("args.txt"))
-+        doom_argv[doom_argc++] = "@args.txt";
++    if (have_fat && FileExists(DATA_DIR "/args.txt"))
++        doom_argv[doom_argc++] = "@" DATA_DIR "/args.txt";
 +
 +    threadPrepare(&doom_thread, DoomMain, NULL, (byte *) doom_stack + sizeof(doom_stack), MAIN_THREAD_PRIO);
 +    threadAttachLocalStorage(&doom_thread, NULL);

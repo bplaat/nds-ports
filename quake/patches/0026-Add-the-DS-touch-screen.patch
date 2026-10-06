@@ -33,7 +33,7 @@ when it changes.
  WinQuake/model.h    |   6 +
  WinQuake/sbar.c     |  15 +-
  WinQuake/sbar.h     |   8 +
- WinQuake/sbar_nds.c | 940 ++++++++++++++++++++++++++++++++++++++++++++
+ WinQuake/sbar_nds.c | 940 ++++++++++++++++++++++++++++++++++++++++++++++++++++
  WinQuake/screen.c   |   2 +
  8 files changed, 970 insertions(+), 9 deletions(-)
  create mode 100644 WinQuake/sbar_nds.c
@@ -159,7 +159,7 @@ index 0d163c2..2268be3 100644
 +// the key of the weapon at a 2D position, 0 for none
 diff --git a/WinQuake/sbar_nds.c b/WinQuake/sbar_nds.c
 new file mode 100644
-index 0000000..873e31a
+index 0000000..6344000
 --- /dev/null
 +++ b/WinQuake/sbar_nds.c
 @@ -0,0 +1,940 @@
@@ -1026,7 +1026,7 @@ index 0000000..873e31a
 +	int		i, j, x, y;
 +	byte	*row;
 +
-+	Draw_Pic (0, 0, Draw_CachePic ("gfx/conback.lmp"));
++	Draw_ConsoleBackground (vid.height);
 +
 +	// an inset, darker, with the bevels the other way around
 +	for (y = HELP_Y; y < HELP_Y + HELP_H; y++)
@@ -1104,7 +1104,7 @@ index 0000000..873e31a
 +	return i < NUM_CELLS ? cells[i].key : 0;
 +}
 diff --git a/WinQuake/screen.c b/WinQuake/screen.c
-index 97f489e..e7f057d 100644
+index f0010e0..c2facaf 100644
 --- a/WinQuake/screen.c
 +++ b/WinQuake/screen.c
 @@ -939,6 +939,7 @@ void SCR_UpdateScreen (void)

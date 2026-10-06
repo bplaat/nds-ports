@@ -61,10 +61,10 @@ Every `.wad` found is listed in a picker that shows each game's title screen.
 IWADs are games, other WADs are mods (PWADs) and start on a matching IWAD:
 DOOM II for MAPxx mods, DOOM for ExMy mods (the shareware can't load mods).
 
-With an SD card the settings go to `/data/doom/default.cfg` as soon as the menu
-closes, and savegames to
-`/data/doom/saves/<game>/doomsav0.dsg` and up, in Doom's own savegame format,
-a mod keeps its own in `saves/<mod>.wad/`. Without one you can still play,
+With an SD card the settings and savegames go to `/data/doom/<wad name>/`
+(for example `/data/doom/doom1.wad/`), with `default.cfg` written as soon as
+the menu closes and `doomsav0.dsg` and up in Doom's own savegame format.
+A mod keeps its own settings and saves in `/data/doom/<mod>.wad/`. Without one you can still play,
 saving then shows a message instead. Extra command line options such as
 `-skill 4` or `-warp 1 3` can be put in `/data/doom/args.txt`.
 
@@ -109,9 +109,9 @@ code is written for the DS only, without `__NDS__` checks.
   Game while playing and Quit Game otherwise.
 - [0008](patches/0008-Start-sound-and-music-at-full-volume.patch):
   Sound and music start at full volume, the DS speakers are small.
-- [0009](patches/0009-Keep-savegames-per-game-in-saves-iwad.patch):
-  Savegames go to `saves/<iwad>/`, so games don't overwrite each other's
-  slots.
+- [0009](patches/0009-Keep-savegames-with-the-game-settings.patch):
+  Savegames go directly in the game's config directory, so games don't
+  overwrite each other's slots.
 - [0010](patches/0010-Keep-the-settings-in-default.cfg.patch): The config
   files, which doomgeneric never read or wrote, keep the settings again,
   written whenever the menu closes. The DS buttons' fire, use and strafe
@@ -182,10 +182,9 @@ of main RAM on a 16-bit bus at half its clock.
   switches the ARM9 to 134 MHz in DSi mode, finds every IWAD and mod in
   NitroFS and on the SD card, shows them in a picker with each game's title
   picture, shows a loading screen and keeps config and saves in
-  `/data/doom/`. Doom runs in a thread with its stack in main RAM, DTCM
+  `/data/doom/<wad name>/`, keeping mods apart from their IWADs. Doom runs
+  in a thread with its stack in main RAM, DTCM
   mostly holds the colormaps. Also the doomgeneric timing interface.
-- [0024](patches/0024-Keep-the-savegames-of-a-mod-apart-from-its-IWAD-s.patch):
-  A mod gets its own savegame directory.
 - [0025](patches/0025-Fit-the-system-layer-to-the-DS.patch): The zone
   takes all free RAM (4 MiB on the DS, 16 MiB on the DSi), `I_Quit` returns to
   the homebrew launcher, `I_Error` shows the message on the touch screen and

@@ -6,39 +6,40 @@ Subject: [PATCH] Add the DS startup
 wl_nds.c switches the ARM9 to 134 MHz in DSi mode, finds the game data
 in /data/wolf3d/ on the SD card, next to the .nds, at the root of the SD
 card or embedded in the ROM, the full game before the shareware, and
-keeps the config and savegames in /data/wolf3d/, or in the ROM without
+keeps the config and savegames in /data/wolf3d/<extension>/, or in the ROM without
 an SD card. Extra arguments are read from args.txt there. While it
 starts the touch screen shows the title in blue, like DOOM's in red and
 Quake's in brown, whether there is an SD card, which game loads, the
 full game or the shareware, and a row of dots like DOOM's, a third for
 each step. As soon as the
 data is found the title picture shows on the top screen while the game
-loads: only its chunk is read and expanded. Errors are shown on the
+loads: only its chunk is read and expanded. Invalid Huffman nodes and
+incomplete title pictures are rejected. Errors are shown on the
 touch screen console, failed assertions too. The console's siscanf,
 which only has to read numbers, and its printing through the string
 formatter leave newlib's scanf and its second printf engine out.
 wl_nds.h is the glue between the SDL implementation and the game.
 ---
- nds/wl_nds.c | 369 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ nds/wl_nds.c | 385 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  nds/wl_nds.h |  46 +++++++
  wl_main.c    |   2 +
- 3 files changed, 417 insertions(+)
+ 3 files changed, 433 insertions(+)
  create mode 100644 nds/wl_nds.c
  create mode 100644 nds/wl_nds.h
 
 diff --git a/nds/wl_nds.c b/nds/wl_nds.c
 new file mode 100644
-index 0000000..8bb8967
+index 0000000..fdf63fa
 --- /dev/null
 +++ b/nds/wl_nds.c
-@@ -0,0 +1,369 @@
+@@ -0,0 +1,385 @@
 +//
 +// Starts Wolf4SDL on the Nintendo DS
 +//
 +// Finds the game data in the data folder on the SD card, next to the .nds or
 +// embedded in the ROM (NitroFS), the full game before the shareware, keeps
-+// the config and savegames in /data/wolf3d/ and reads extra arguments from
-+// args.txt there. Errors are shown on the touch screen console.
++// the config and savegames in /data/wolf3d/<extension>/ and reads extra
++// arguments from /data/wolf3d/args.txt. Errors are shown on the touch screen console.
 +//
 +
 +// libnds and Wolf4SDL both have a Keyboard and a SoundMode
@@ -65,7 +66,7 @@ index 0000000..8bb8967
 +#include "wl_nds.h"
 +
 +// Config, savegames and game data live in the usual homebrew data folder
-+#define DATA_DIR "data/wolf3d"
++#define DATA_DIR "/data/wolf3d"
 +#define MAX_ARGS 32
 +
 +static PrintConsole console;
@@ -227,7 +228,7 @@ index 0000000..8bb8967
 +    snprintf (name, sizeof(name), "vgagraph.%s", ext);
 +    len = end - start;
 +    if (dict == NULL || len <= 4 || (chunk = ReadFile (name, start, &len)) == NULL
-+        || (chunk[0] | (chunk[1] << 8) | (chunk[2] << 16)) != 320 * 200 || (pixels = malloc (320 * 200)) == NULL)
++        || (chunk[0] | (chunk[1] << 8) | (chunk[2] << 16) | ((uint32_t) chunk[3] << 24)) != 320 * 200 || (pixels = malloc (320 * 200)) == NULL)
 +        goto done;
 +
 +    // Pictures are stored in four planes of every fourth pixel, so each
@@ -254,14 +255,20 @@ index 0000000..8bb8967
 +                if (value >= 256)
 +                {
 +                    node = value - 256;
++                    if (node >= 255)
++                        goto done;
 +                    continue;
 +                }
 +                *dst = value;
-+                if ((dst += 4) >= plane_end)
++                if (dst >= plane_end - 4)
 +                    dst = pixels + ++plane;
++                else
++                    dst += 4;
 +                node = 254;
 +            }
 +        }
++        if (plane < 4)
++            goto done;
 +    }
 +    NDS_ShowSplash (pixels, gamepal);
 +
@@ -299,7 +306,7 @@ index 0000000..8bb8967
 +        { "wl1", "Wolf3D Shareware" },
 +    };
 +    static char *args[MAX_ARGS];
-+    static char dirs[4][256], datadir[256];
++    static char dirs[4][256], datadir[256], configdir[300];
 +    int num_dirs = 0, i, j, n = 0;
 +
 +    // In DSi mode the ARM9 runs at twice the speed of the DS
@@ -319,15 +326,23 @@ index 0000000..8bb8967
 +    {
 +        char root[64], *slash;
 +
-+        getcwd (root, sizeof(root));
-+        snprintf (datadir, sizeof(datadir), "%sdata", root);
++        // Keep only the SD volume prefix, never the launcher's directory.
++        // Save paths still refer to the SD card after chdir to NitroFS.
++        if (getcwd (root, sizeof(root)) == NULL)
++            root[0] = '\0';
++        slash = strchr (root, ':');
++        if (slash != NULL)
++            slash[1] = '\0';
++        else
++            root[0] = '\0';
++        snprintf (datadir, sizeof(datadir), "%s/data", root);
 +        mkdir (datadir, 0777);
 +        snprintf (datadir, sizeof(datadir), "%s" DATA_DIR, root);
 +        mkdir (datadir, 0777);
 +        snprintf (dirs[num_dirs++], 256, "%s/", datadir);
 +        if (*argc > 0 && (slash = strrchr ((*argv)[0], '/')) != NULL && slash - (*argv)[0] < 255)
 +            snprintf (dirs[num_dirs++], 256, "%.*s", (int) (slash - (*argv)[0] + 1), (*argv)[0]);
-+        strcpy (dirs[num_dirs++], root);
++        snprintf (dirs[num_dirs++], 256, "%s/", root);
 +    }
 +    else
 +    {
@@ -352,7 +367,7 @@ index 0000000..8bb8967
 +            }
 +        }
 +    }
-+    NDS_ShowMessage ("No game data found!", "Copy the *.wl6 files of\nWolfenstein 3D to\n/" DATA_DIR "/ on the SD card,\nor embed them in the ROM at\nbuild time (see README).");
++    NDS_ShowMessage ("No game data found!", "Copy the *.wl6 files of\nWolfenstein 3D to\n" DATA_DIR "/ on the SD card,\nor embed them in the ROM at\nbuild time (see README).");
 +    exit (1);
 +
 +found:
@@ -361,8 +376,10 @@ index 0000000..8bb8967
 +    ShowTitle (games[i].ext);
 +    LoadingStep ();
 +    args[n++] = *argc > 0 ? (*argv)[0] : "wolf3d";
++    snprintf (configdir, sizeof(configdir), "%s/%s", datadir, games[i].ext);
++    mkdir (configdir, 0777);
 +    args[n++] = "--configdir";
-+    args[n++] = datadir;
++    args[n++] = configdir;
 +    // Extra arguments (eg. --tedlevel 3 --hard) from args.txt
 +    {
 +        char path[300];
