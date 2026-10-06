@@ -211,10 +211,10 @@ index 0000000..4300f62
 +    return button >= 0 && button < SDL_JoystickNumButtons (joystick) && (keys_held & joy_buttons[button]);
 +}
 diff --git a/wl_def.h b/wl_def.h
-index 7f531d1..12b2766 100644
+index edde473..8398cdf 100644
 --- a/wl_def.h
 +++ b/wl_def.h
-@@ -1056,8 +1056,9 @@ void    UpdateSoundLoc (void);
+@@ -1057,8 +1057,9 @@ void    UpdateSoundLoc (void);
  
  #define BASEMOVE    35
  #define RUNMOVE     70

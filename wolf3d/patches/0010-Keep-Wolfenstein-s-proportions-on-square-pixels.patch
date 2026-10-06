@@ -14,7 +14,7 @@ the same field of view, so nothing looks squashed.
  3 files changed, 20 insertions(+), 11 deletions(-)
 
 diff --git a/wl_def.h b/wl_def.h
-index b5c4b98..5917d18 100644
+index 95d7888..2f025de 100644
 --- a/wl_def.h
 +++ b/wl_def.h
 @@ -185,6 +185,11 @@ typedef uint8_t tiletype;

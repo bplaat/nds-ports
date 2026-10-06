@@ -17,19 +17,19 @@ loads: only its chunk is read and expanded. Errors are shown on the
 touch screen console. wl_nds.h is the glue between the SDL
 implementation and the game.
 ---
- nds/wl_nds.c | 302 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ nds/wl_nds.c | 309 +++++++++++++++++++++++++++++++++++++++++++++++++++
  nds/wl_nds.h |  46 ++++++++
  wl_main.c    |   2 +
- 3 files changed, 350 insertions(+)
+ 3 files changed, 357 insertions(+)
  create mode 100644 nds/wl_nds.c
  create mode 100644 nds/wl_nds.h
 
 diff --git a/nds/wl_nds.c b/nds/wl_nds.c
 new file mode 100644
-index 0000000..de0c547
+index 0000000..cf099dd
 --- /dev/null
 +++ b/nds/wl_nds.c
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,309 @@
 +//
 +// Starts Wolf4SDL on the Nintendo DS
 +//
@@ -77,11 +77,18 @@ index 0000000..de0c547
 +    BG_PALETTE_SUB[12 * 16 + 15] = RGB15 (12, 18, 31);
 +}
 +
-+// The loading dots fill one row like DOOM's, a third for each step of the
-+// startup, which has no log to count
++// The loading dots fill a row like DOOM's, with two columns of margin on
++// both sides like the text, a third for each step of the startup, which has
++// no log to count
++#define LOADING_DOTS 28
++#define LOADING_STEPS 3
++
 +static void LoadingStep (void)
 +{
-+    printf ("..........");
++    static int step, dots;
++
++    for (++step; dots < LOADING_DOTS * step / LOADING_STEPS; ++dots)
++        putchar ('.');
 +    fflush (stdout);
 +}
 +

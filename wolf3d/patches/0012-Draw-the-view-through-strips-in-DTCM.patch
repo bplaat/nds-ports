@@ -20,10 +20,10 @@ ARM9 three cycles. Posts taller than the view are clipped at once.
  3 files changed, 155 insertions(+), 52 deletions(-)
 
 diff --git a/wl_def.h b/wl_def.h
-index d4e3d29..7f531d1 100644
+index 3ac7e4e..edde473 100644
 --- a/wl_def.h
 +++ b/wl_def.h
-@@ -1234,6 +1234,14 @@ typedef struct
+@@ -1235,6 +1235,14 @@ typedef struct
  
  void ScaleShape (int xcenter, int shapenum, int height, uint32_t flags);
  void SimpleScaleShape (int xcenter, int shapenum, int height);

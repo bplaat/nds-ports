@@ -8,14 +8,28 @@ episode and floor, also when it replaces an older one. Selecting a
 slot saves immediately, without a name-editing step. Quicksave also
 updates the stored and displayed name to match the current level. A
 new high score gets the user name of the DS settings (NDS_PlayerName),
-the list shows it until a button is pressed.
+the list shows it until a button is pressed. It's written to the config
+right away, not only on quitting, a handheld is often just switched off.
 ---
- wl_inter.c | 34 +++++++------------------------
+ wl_def.h   |  1 +
+ wl_inter.c | 37 +++++++++-------------------------
  wl_menu.c  | 59 ++++++++++++++++++------------------------------------
- 2 files changed, 26 insertions(+), 67 deletions(-)
+ 3 files changed, 30 insertions(+), 67 deletions(-)
 
+diff --git a/wl_def.h b/wl_def.h
+index b5c4b98..95d7888 100644
+--- a/wl_def.h
++++ b/wl_def.h
+@@ -994,6 +994,7 @@ boolean         LoadTheGame (FILE *file, int x, int y);
+ boolean         SaveTheGame (FILE *file, int x, int y);
+ void            ShowViewSize (int width);
+ void            ShutdownId (void);
++void            WriteConfig (void);
+ 
+ 
+ /*
 diff --git a/wl_inter.c b/wl_inter.c
-index d25bc8b..bcbea3f 100644
+index d25bc8b..6c6ee7d 100644
 --- a/wl_inter.c
 +++ b/wl_inter.c
 @@ -1,6 +1,7 @@
@@ -26,20 +40,18 @@ index d25bc8b..bcbea3f 100644
  
  LRstruct LevelRatios[LRpack];
  int32_t lastBreathTime = 0;
-@@ -1158,37 +1159,16 @@ CheckHighScore (int32_t score, word other)
+@@ -1158,37 +1159,19 @@ CheckHighScore (int32_t score, word other)
  #else
      StartCPMusic (ROSTER_MUS);
  #endif
+-    DrawHighScores ();
+-
+-    VW_FadeIn ();
+-
 +    // There is no keyboard to type a name, a new high score gets the user
-+    // name of the DS settings
-+    if (n != -1)
-+        NDS_PlayerName (Scores[n].name, sizeof(Scores[n].name));
-     DrawHighScores ();
- 
-     VW_FadeIn ();
- 
--    if (n != -1)
--    {
++    // name of the DS settings, kept right away with the config
+     if (n != -1)
+     {
 -        //
 -        // got a high score
 -        //
@@ -63,8 +75,13 @@ index d25bc8b..bcbea3f 100644
 -    {
 -        IN_ClearKeysDown ();
 -        IN_UserInput (500);
--    }
--
++        NDS_PlayerName (Scores[n].name, sizeof(Scores[n].name));
++        WriteConfig ();
+     }
++    DrawHighScores ();
+ 
++    VW_FadeIn ();
++
 +    IN_ClearKeysDown ();
 +    IN_UserInput (500);
  }

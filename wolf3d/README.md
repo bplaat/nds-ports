@@ -106,7 +106,8 @@ code is written for the DS only, without `__NDS__` checks.
 - [0005](patches/0005-Name-savegames-and-high-scores-without-typing.patch):
   Savegames are named after the level, eg. "Episode 1 Floor 3", also when
   they replace an older one, without a name-editing step. Quicksave updates
-  the name too. A new high score gets the user name of the DS settings.
+  the name too. A new high score gets the user name of the DS settings and
+  is kept right away, not only on quitting.
 - [0006](patches/0006-Show-a-message-when-a-savegame-can-t-be-written.patch):
   Without an SD card saving shows a message instead of crashing.
 - [0007](patches/0007-Trim-the-menus-for-a-handheld-console.patch): No
