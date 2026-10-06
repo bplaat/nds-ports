@@ -1,33 +1,45 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: nds-ports <nds-ports@localhost>
-Date: Wed, 30 Sep 2026 14:20:55 +0200
-Subject: [PATCH] Load brush models one lump at a time
+Date: Tue, 6 Oct 2026 07:09:56 +0200
+Subject: [PATCH] Keep brush models and skins out of RAM
 
 Mod_LoadModel read the whole .bsp into temporary hunk memory before
 parsing it, which is more than 1 MiB for most maps and most of what the
-DS has. Brush models are now read from the file lump by lump, only one
-lump at a time in temporary memory, and the textures are read one by one
-straight into their place in the hunk. Alias and sprite models are small
-and still load in one piece.
+DS has. Brush models are now read from the file a lump at a time, only
+one lump in temporary memory. Alias and sprite models are small and
+still load in one piece.
+
+The 3D hardware keeps its own copies, so the rest doesn't stay in RAM:
+textures are only read up to their headers, the renderer reads their
+pixels into VRAM (R_LoadTextures), alias skins stay in the model file,
+which the renderer reads again when a map starts, and the vertexes,
+edges, surfedges and light maps go to the high hunk and are freed once
+R_BuildSurfaces made the hardware vertices and vertex light out of them.
+The planes aren't allocated twice. The temporary memory a file was read
+into goes back to the cache once it's used (Hunk_FreeTemp).
 ---
- WinQuake/model.c | 149 +++++++++++++++++++++++++++++------------------
- 1 file changed, 92 insertions(+), 57 deletions(-)
+ WinQuake/model.c | 233 ++++++++++++++++++++++++++++-------------------
+ WinQuake/model.h |   7 ++
+ WinQuake/zone.c  |  16 ++++
+ WinQuake/zone.h  |   1 +
+ 4 files changed, 162 insertions(+), 95 deletions(-)
 
 diff --git a/WinQuake/model.c b/WinQuake/model.c
-index 940f7fe..9d0d292 100644
+index 940f7fe..ffd9997 100644
 --- a/WinQuake/model.c
 +++ b/WinQuake/model.c
-@@ -35,6 +35,9 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash);
+@@ -35,6 +35,10 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash);
  
  byte	mod_novis[MAX_MAP_LEAFS/8];
  
 +FILE	*mod_file;		// the brush model being loaded
 +int		mod_filebase;
++byte	*mod_aliasfile;	// the alias model being loaded
 +
  #define	MAX_MOD_KNOWN	256
  model_t	mod_known[MAX_MOD_KNOWN];
  int		mod_numknown;
-@@ -256,7 +259,7 @@ Loads a model into the cache
+@@ -256,7 +260,7 @@ Loads a model into the cache
  model_t *Mod_LoadModel (model_t *mod, qboolean crash)
  {
  	unsigned *buf;
@@ -36,7 +48,7 @@ index 940f7fe..9d0d292 100644
  
  	if (mod->type == mod_alias)
  	{
-@@ -275,18 +278,16 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash)
+@@ -275,18 +279,16 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash)
  //
  // because the world is so huge, load it one piece at a time
  //
@@ -60,7 +72,7 @@ index 940f7fe..9d0d292 100644
  //
  // allocate a new model
  //
-@@ -301,18 +302,22 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash)
+@@ -301,18 +303,24 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash)
  // call the apropriate loader
  	mod->needload = NL_PRESENT;
  
@@ -80,6 +92,8 @@ index 940f7fe..9d0d292 100644
 +			Mod_LoadAliasModel (mod, buf);
 +		else
 +			Mod_LoadSpriteModel (mod, buf);
++		// the file's temporary memory goes back to the cache
++		Hunk_FreeTemp ();
  		break;
  	
  	default:
@@ -89,7 +103,7 @@ index 940f7fe..9d0d292 100644
  		break;
  	}
  
-@@ -344,7 +349,37 @@ model_t *Mod_ForName (char *name, qboolean crash)
+@@ -344,7 +352,59 @@ model_t *Mod_ForName (char *name, qboolean crash)
  ===============================================================================
  */
  
@@ -122,19 +136,41 @@ index 940f7fe..9d0d292 100644
 +	void	*buf;
 +
 +	buf = Hunk_TempAlloc (l->filelen);
++	if (!buf)
++		Sys_Error ("Mod_LoadLump: not enough memory for %s", loadmodel->name);
 +	Mod_ReadLump (l, 0, buf, l->filelen);
++	return buf;
++}
++
++/*
++=================
++Mod_AllocGeometry
++
++On the DS the vertexes, edges and surfedges are only needed while loading,
++the 3D hardware gets its own copy of the vertices, so they go to the high
++hunk to be freed again. They are allocated before their lump is read, a high
++allocation frees the temporary memory.
++=================
++*/
++void *Mod_AllocGeometry (int size)
++{
++	void	*buf;
++
++	buf = Hunk_HighAllocName (size, loadname);
++	if (!buf)
++		Sys_Error ("Mod_AllocGeometry: not enough memory for %s", loadmodel->name);
 +	return buf;
 +}
  
  
  /*
-@@ -354,58 +389,60 @@ Mod_LoadTextures
+@@ -354,58 +414,56 @@ Mod_LoadTextures
  */
  void Mod_LoadTextures (lump_t *l)
  {
 -	int		i, j, pixels, num, max, altmax;
 -	miptex_t	*mt;
-+	int		i, j, pixels, num, max, altmax, nummiptex;
++	int		i, j, num, max, altmax, nummiptex;
 +	int		*dataofs;
 +	miptex_t	mt;
  	texture_t	*tx, *tx2;
@@ -182,10 +218,11 @@ index 940f7fe..9d0d292 100644
 -		if ( (mt->width & 15) || (mt->height & 15) )
 -			Sys_Error ("Texture %s is not 16 aligned", mt->name);
 -		pixels = mt->width*mt->height/64*85;
+-		tx = Hunk_AllocName (sizeof(texture_t) +pixels, loadname );
 +		if ( (mt.width & 15) || (mt.height & 15) )
 +			Sys_Error ("Texture %s is not 16 aligned", mt.name);
-+		pixels = mt.width*mt.height/64*85;
- 		tx = Hunk_AllocName (sizeof(texture_t) +pixels, loadname );
++		// the pixels go to VRAM, R_LoadTextures reads them from the lump
++		tx = Hunk_AllocName (sizeof(texture_t), loadname );
  		loadmodel->textures[i] = tx;
  
 -		memcpy (tx->name, mt->name, sizeof(tx->name));
@@ -196,15 +233,14 @@ index 940f7fe..9d0d292 100644
 +		tx->height = mt.height;
  		for (j=0 ; j<MIPLEVELS ; j++)
 -			tx->offsets[j] = mt->offsets[j] + sizeof(texture_t) - sizeof(miptex_t);
-+			tx->offsets[j] = mt.offsets[j] + sizeof(texture_t) - sizeof(miptex_t);
- 		// the pixels immediately follow the structures
+-		// the pixels immediately follow the structures
 -		memcpy ( tx+1, mt+1, pixels);
-+		Mod_ReadLump (l, dataofs[i] + sizeof(mt), tx+1, pixels);
- 		
+-		
 -		if (!Q_strncmp(mt->name,"sky",3))	
-+		if (!Q_strncmp(mt.name,"sky",3))
- 			R_InitSky (tx);
+-			R_InitSky (tx);
++			tx->offsets[j] = dataofs[i] + mt.offsets[j];
  	}
++	R_LoadTextures (loadmodel->textures, nummiptex, l);
  
  //
  // sequence the animations
@@ -214,7 +250,7 @@ index 940f7fe..9d0d292 100644
  	{
  		tx = loadmodel->textures[i];
  		if (!tx || tx->name[0] != '+')
-@@ -438,7 +475,7 @@ void Mod_LoadTextures (lump_t *l)
+@@ -438,7 +496,7 @@ void Mod_LoadTextures (lump_t *l)
  		else
  			Sys_Error ("Bad animating texture %s", tx->name);
  
@@ -223,16 +259,19 @@ index 940f7fe..9d0d292 100644
  		{
  			tx2 = loadmodel->textures[j];
  			if (!tx2 || tx2->name[0] != '+')
-@@ -509,7 +546,7 @@ void Mod_LoadLighting (lump_t *l)
+@@ -508,8 +566,9 @@ void Mod_LoadLighting (lump_t *l)
+ 		loadmodel->lightdata = NULL;
  		return;
  	}
- 	loadmodel->lightdata = Hunk_AllocName ( l->filelen, loadname);	
+-	loadmodel->lightdata = Hunk_AllocName ( l->filelen, loadname);	
 -	memcpy (loadmodel->lightdata, mod_base + l->fileofs, l->filelen);
++	// R_BuildSurfaces makes vertex light out of it, then it's freed
++	loadmodel->lightdata = Mod_AllocGeometry (l->filelen);
 +	Mod_ReadLump (l, 0, loadmodel->lightdata, l->filelen);
  }
  
  
-@@ -526,7 +563,7 @@ void Mod_LoadVisibility (lump_t *l)
+@@ -526,7 +585,7 @@ void Mod_LoadVisibility (lump_t *l)
  		return;
  	}
  	loadmodel->visdata = Hunk_AllocName ( l->filelen, loadname);	
@@ -241,7 +280,7 @@ index 940f7fe..9d0d292 100644
  }
  
  
-@@ -543,7 +580,7 @@ void Mod_LoadEntities (lump_t *l)
+@@ -543,7 +602,7 @@ void Mod_LoadEntities (lump_t *l)
  		return;
  	}
  	loadmodel->entities = Hunk_AllocName ( l->filelen, loadname);	
@@ -250,16 +289,21 @@ index 940f7fe..9d0d292 100644
  }
  
  
-@@ -558,7 +595,7 @@ void Mod_LoadVertexes (lump_t *l)
+@@ -558,11 +617,11 @@ void Mod_LoadVertexes (lump_t *l)
  	mvertex_t	*out;
  	int			i, count;
  
 -	in = (void *)(mod_base + l->fileofs);
-+	in = Mod_LoadLump (l);
  	if (l->filelen % sizeof(*in))
  		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
  	count = l->filelen / sizeof(*in);
-@@ -586,7 +623,7 @@ void Mod_LoadSubmodels (lump_t *l)
+-	out = Hunk_AllocName ( count*sizeof(*out), loadname);	
++	out = Mod_AllocGeometry ( count*sizeof(*out));
++	in = Mod_LoadLump (l);
+ 
+ 	loadmodel->vertexes = out;
+ 	loadmodel->numvertexes = count;
+@@ -586,7 +645,7 @@ void Mod_LoadSubmodels (lump_t *l)
  	dmodel_t	*out;
  	int			i, j, count;
  
@@ -268,16 +312,21 @@ index 940f7fe..9d0d292 100644
  	if (l->filelen % sizeof(*in))
  		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
  	count = l->filelen / sizeof(*in);
-@@ -622,7 +659,7 @@ void Mod_LoadEdges (lump_t *l)
+@@ -622,11 +681,11 @@ void Mod_LoadEdges (lump_t *l)
  	medge_t *out;
  	int 	i, count;
  
 -	in = (void *)(mod_base + l->fileofs);
-+	in = Mod_LoadLump (l);
  	if (l->filelen % sizeof(*in))
  		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
  	count = l->filelen / sizeof(*in);
-@@ -651,7 +688,7 @@ void Mod_LoadTexinfo (lump_t *l)
+-	out = Hunk_AllocName ( (count + 1) * sizeof(*out), loadname);	
++	out = Mod_AllocGeometry ( (count + 1) * sizeof(*out));
++	in = Mod_LoadLump (l);
+ 
+ 	loadmodel->edges = out;
+ 	loadmodel->numedges = count;
+@@ -651,7 +710,7 @@ void Mod_LoadTexinfo (lump_t *l)
  	int		miptex;
  	float	len1, len2;
  
@@ -286,7 +335,7 @@ index 940f7fe..9d0d292 100644
  	if (l->filelen % sizeof(*in))
  		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
  	count = l->filelen / sizeof(*in);
-@@ -773,7 +810,7 @@ void Mod_LoadFaces (lump_t *l)
+@@ -773,7 +832,7 @@ void Mod_LoadFaces (lump_t *l)
  	int			i, count, surfnum;
  	int			planenum, side;
  
@@ -295,7 +344,7 @@ index 940f7fe..9d0d292 100644
  	if (l->filelen % sizeof(*in))
  		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
  	count = l->filelen / sizeof(*in);
-@@ -856,7 +893,7 @@ void Mod_LoadNodes (lump_t *l)
+@@ -856,7 +915,7 @@ void Mod_LoadNodes (lump_t *l)
  	dnode_t		*in;
  	mnode_t 	*out;
  
@@ -304,7 +353,7 @@ index 940f7fe..9d0d292 100644
  	if (l->filelen % sizeof(*in))
  		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
  	count = l->filelen / sizeof(*in);
-@@ -903,7 +940,7 @@ void Mod_LoadLeafs (lump_t *l)
+@@ -903,7 +962,7 @@ void Mod_LoadLeafs (lump_t *l)
  	mleaf_t 	*out;
  	int			i, j, count, p;
  
@@ -313,7 +362,7 @@ index 940f7fe..9d0d292 100644
  	if (l->filelen % sizeof(*in))
  		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
  	count = l->filelen / sizeof(*in);
-@@ -950,7 +987,7 @@ void Mod_LoadClipnodes (lump_t *l)
+@@ -950,7 +1009,7 @@ void Mod_LoadClipnodes (lump_t *l)
  	int			i, count;
  	hull_t		*hull;
  
@@ -322,7 +371,7 @@ index 940f7fe..9d0d292 100644
  	if (l->filelen % sizeof(*in))
  		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
  	count = l->filelen / sizeof(*in);
-@@ -1041,7 +1078,7 @@ void Mod_LoadMarksurfaces (lump_t *l)
+@@ -1041,7 +1100,7 @@ void Mod_LoadMarksurfaces (lump_t *l)
  	short		*in;
  	msurface_t **out;
  	
@@ -331,16 +380,21 @@ index 940f7fe..9d0d292 100644
  	if (l->filelen % sizeof(*in))
  		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
  	count = l->filelen / sizeof(*in);
-@@ -1069,7 +1106,7 @@ void Mod_LoadSurfedges (lump_t *l)
+@@ -1069,11 +1128,11 @@ void Mod_LoadSurfedges (lump_t *l)
  	int		i, count;
  	int		*in, *out;
  	
 -	in = (void *)(mod_base + l->fileofs);
-+	in = Mod_LoadLump (l);
  	if (l->filelen % sizeof(*in))
  		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
  	count = l->filelen / sizeof(*in);
-@@ -1095,7 +1132,7 @@ void Mod_LoadPlanes (lump_t *l)
+-	out = Hunk_AllocName ( count*sizeof(*out), loadname);	
++	out = Mod_AllocGeometry ( count*sizeof(*out));
++	in = Mod_LoadLump (l);
+ 
+ 	loadmodel->surfedges = out;
+ 	loadmodel->numsurfedges = count;
+@@ -1095,11 +1154,11 @@ void Mod_LoadPlanes (lump_t *l)
  	int			count;
  	int			bits;
  	
@@ -349,7 +403,20 @@ index 940f7fe..9d0d292 100644
  	if (l->filelen % sizeof(*in))
  		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
  	count = l->filelen / sizeof(*in);
-@@ -1158,8 +1195,6 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
+-	out = Hunk_AllocName ( count*2*sizeof(*out), loadname);	
++	out = Hunk_AllocName ( count*sizeof(*out), loadname);
+ 	
+ 	loadmodel->planes = out;
+ 	loadmodel->numplanes = count;
+@@ -1148,6 +1207,7 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
+ 	int			i, j;
+ 	dheader_t	*header;
+ 	dmodel_t 	*bm;
++	int			geometrymark;
+ 	
+ 	loadmodel->type = mod_brush;
+ 	
+@@ -1158,13 +1218,11 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
  		Sys_Error ("Mod_LoadBrushModel: %s has wrong version number (%i should be %i)", mod->name, i, BSPVERSION);
  
  // swap all the lumps
@@ -357,4 +424,127 @@ index 940f7fe..9d0d292 100644
 -
  	for (i=0 ; i<sizeof(dheader_t)/4 ; i++)
  		((int *)header)[i] = LittleLong ( ((int *)header)[i]);
+ 
+ // load into heap
+-	
++	geometrymark = Hunk_HighMark ();
+ 	Mod_LoadVertexes (&header->lumps[LUMP_VERTEXES]);
+ 	Mod_LoadEdges (&header->lumps[LUMP_EDGES]);
+ 	Mod_LoadSurfedges (&header->lumps[LUMP_SURFEDGES]);
+@@ -1173,6 +1231,15 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
+ 	Mod_LoadPlanes (&header->lumps[LUMP_PLANES]);
+ 	Mod_LoadTexinfo (&header->lumps[LUMP_TEXINFO]);
+ 	Mod_LoadFaces (&header->lumps[LUMP_FACES]);
++	// the 3D hardware has its own copy of the geometry
++	R_BuildSurfaces (loadmodel);
++	Hunk_FreeToHighMark (geometrymark);
++	loadmodel->vertexes = NULL;
++	loadmodel->edges = NULL;
++	loadmodel->surfedges = NULL;
++	loadmodel->lightdata = NULL;
++	for (i=0 ; i<loadmodel->numsurfaces ; i++)
++		loadmodel->surfaces[i].samples = NULL;
+ 	Mod_LoadMarksurfaces (&header->lumps[LUMP_MARKSURFACES]);
+ 	Mod_LoadVisibility (&header->lumps[LUMP_VISIBILITY]);
+ 	Mod_LoadLeafs (&header->lumps[LUMP_LEAFS]);
+@@ -1351,34 +1418,9 @@ Mod_LoadAliasSkin
+ void * Mod_LoadAliasSkin (void * pin, int *pskinindex, int skinsize,
+ 	aliashdr_t *pheader)
+ {
+-	int		i;
+-	byte	*pskin, *pinskin;
+-	unsigned short	*pusskin;
+-
+-	pskin = Hunk_AllocName (skinsize * r_pixbytes, loadname);
+-	pinskin = (byte *)pin;
+-	*pskinindex = (byte *)pskin - (byte *)pheader;
+-
+-	if (r_pixbytes == 1)
+-	{
+-		Q_memcpy (pskin, pinskin, skinsize);
+-	}
+-	else if (r_pixbytes == 2)
+-	{
+-		pusskin = (unsigned short *)pskin;
+-
+-		for (i=0 ; i<skinsize ; i++)
+-			pusskin[i] = d_8to16table[pinskin[i]];
+-	}
+-	else
+-	{
+-		Sys_Error ("Mod_LoadAliasSkin: driver set invalid r_pixbytes: %d\n",
+-				 r_pixbytes);
+-	}
+-
+-	pinskin += skinsize;
+-
+-	return ((void *)pinskin);
++	// the skins go to VRAM, R_NewMap reads them from this offset in the file
++	*pskinindex = (byte *)pin - mod_aliasfile;
++	return (byte *)pin + skinsize;
+ }
+ 
+ 
+@@ -1460,6 +1502,7 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+ 	
+ 	start = Hunk_LowMark ();
+ 
++	mod_aliasfile = buffer;
+ 	pinmodel = (mdl_t *)buffer;
+ 
+ 	version = LittleLong (pinmodel->version);
+diff --git a/WinQuake/model.h b/WinQuake/model.h
+index 2e89862..be9b165 100644
+--- a/WinQuake/model.h
++++ b/WinQuake/model.h
+@@ -379,4 +379,11 @@ void	Mod_TouchModel (char *name);
+ mleaf_t *Mod_PointInLeaf (float *p, model_t *model);
+ byte	*Mod_LeafPVS (mleaf_t *leaf, model_t *model);
+ 
++// model.c
++void	Mod_ReadLump (lump_t *l, int ofs, void *dest, int len);
++
++// r_nds.c, uploads textures to VRAM and builds the 3D hardware vertices
++void	R_LoadTextures (texture_t **textures, int numtextures, lump_t *l);
++void	R_BuildSurfaces (model_t *mod);
++
+ #endif	// __MODEL__
+diff --git a/WinQuake/zone.c b/WinQuake/zone.c
+index e30d7f8..63c7c9c 100644
+--- a/WinQuake/zone.c
++++ b/WinQuake/zone.c
+@@ -546,6 +546,22 @@ void *Hunk_TempAlloc (int size)
+ 	return buf;
+ }
+ 
++/*
++===================
++Hunk_FreeTemp
++
++Gives the memory of Hunk_TempAlloc back to the cache once its data is used
++===================
++*/
++void Hunk_FreeTemp (void)
++{
++	if (hunk_tempactive)
++	{
++		Hunk_FreeToHighMark (hunk_tempmark);
++		hunk_tempactive = false;
++	}
++}
++
+ /*
+ ===============================================================================
+ 
+diff --git a/WinQuake/zone.h b/WinQuake/zone.h
+index 7655ad9..e4fc171 100644
+--- a/WinQuake/zone.h
++++ b/WinQuake/zone.h
+@@ -105,6 +105,7 @@ int	Hunk_HighMark (void);
+ void Hunk_FreeToHighMark (int mark);
+ 
+ void *Hunk_TempAlloc (int size);
++void Hunk_FreeTemp (void);
+ 
+ void Hunk_Check (void);
  

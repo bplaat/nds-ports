@@ -1,44 +1,42 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: nds-ports <nds-ports@localhost>
-Date: Wed, 30 Sep 2026 15:34:18 +0200
-Subject: [PATCH] Run the local server at 20 Hz on the DS
+Date: Tue, 6 Oct 2026 07:09:57 +0200
+Subject: [PATCH] Run the local server at 20 Hz
 
 In single player the server ran every frame, its physics and QuakeC are
 half of what the DS spends on a frame. It now runs at 20 Hz and the
-client interpolates the entities in between, like in network games.
+client interpolates the entities in between, like in network games. A
+server frame runs at most 0.1 s of physics, like Host_FilterTime.
 ---
- WinQuake/cl_main.c  |  5 +++++
- WinQuake/host.c     | 18 ++++++++++++++++++
+ WinQuake/cl_main.c  |  3 ++-
+ WinQuake/host.c     | 17 ++++++++++++++++-
  WinQuake/quakedef.h |  3 +++
- 3 files changed, 26 insertions(+)
+ 3 files changed, 21 insertions(+), 2 deletions(-)
 
 diff --git a/WinQuake/cl_main.c b/WinQuake/cl_main.c
-index 5812143..d8972ed 100644
+index 5812143..7d4769c 100644
 --- a/WinQuake/cl_main.c
 +++ b/WinQuake/cl_main.c
-@@ -394,7 +394,12 @@ float	CL_LerpPoint (void)
+@@ -394,7 +394,8 @@ float	CL_LerpPoint (void)
  
  	f = cl.mtime[0] - cl.mtime[1];
  	
-+#ifdef __NDS__
+-	if (!f || cl_nolerp.value || cls.timedemo || sv.active)
 +	// the local server runs at a lower rate than the client
 +	if (!f || cl_nolerp.value || cls.timedemo)
-+#else
- 	if (!f || cl_nolerp.value || cls.timedemo || sv.active)
-+#endif
  	{
  		cl.time = cl.mtime[0];
  		return 1;
 diff --git a/WinQuake/host.c b/WinQuake/host.c
-index 012f7c1..68d5c58 100644
+index 6eeafa8..fbf055f 100644
 --- a/WinQuake/host.c
 +++ b/WinQuake/host.c
-@@ -675,7 +675,25 @@ void _Host_Frame (float time)
+@@ -671,7 +671,22 @@ void _Host_Frame (float time)
  	Host_GetConsoleCommands ();
  	
  	if (sv.active)
+-		Host_ServerFrame ();
 +	{
-+#ifdef __NDS__
 +		// the server runs at a lower rate, the client interpolates the
 +		// entities in between
 +		static double	server_time;
@@ -47,29 +45,27 @@ index 012f7c1..68d5c58 100644
 +		server_time += host_frametime;
 +		if (server_time >= 1.0 / SERVER_FPS)
 +		{
-+			host_frametime = server_time;
++			// at most 0.1 s of physics at once, like Host_FilterTime
++			host_frametime = server_time > 0.1 ? 0.1 : server_time;
 +			server_time = 0;
 +			Host_ServerFrame ();
 +			host_frametime = frametime;
 +		}
-+#else
- 		Host_ServerFrame ();
-+#endif
 +	}
  
  //-------------------
  //
 diff --git a/WinQuake/quakedef.h b/WinQuake/quakedef.h
-index 347b9e9..ec13723 100644
+index 4ba1d85..7886ad8 100644
 --- a/WinQuake/quakedef.h
 +++ b/WinQuake/quakedef.h
-@@ -79,6 +79,9 @@ void	VID_UnlockBuffer (void);
+@@ -78,6 +78,9 @@ void	VID_UnlockBuffer (void);
+ 
  #define UNUSED(x)	(x = x)	// for pesky compiler / lint warnings
  
- #ifdef __NDS__
 +// The server runs at most at this rate on the DS, the client interpolates
 +#define	SERVER_FPS				20
 +
  // The DS has 4 MiB of RAM in total, Quake fits with less than it asks for
  #define	MINIMUM_MEMORY			0x200000
- #else
+ #define	MINIMUM_MEMORY_LEVELPAK	(MINIMUM_MEMORY + 0x100000)

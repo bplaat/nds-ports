@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Tue, 6 Oct 2026 07:09:58 +0200
+Subject: [PATCH] Add a Nintendo DS build
+
+Makefile.nds builds a DSi enhanced .nds with devkitARM and libnds/calico,
+with int sized enums like Quake expects and common symbols for the
+globals it defines in headers. The collision code, memcpy and memset and
+libgcc's software floating point, which Quake uses everywhere as the
+ARM9 has no floating point unit, run from ITCM as ARM code: the floating
+point objects are taken out of libgcc with their code moved to ITCM and
+linked before it. Constants are single precision, so expressions like
+x * 0.5 don't go through double precision. HOT_CODE puts single
+functions in ITCM, the rest is Thumb code in main RAM.
+---
+ WinQuake/.gitignore   |  4 ++
+ WinQuake/Makefile.nds | 93 +++++++++++++++++++++++++++++++++++++++++++
+ WinQuake/quakedef.h   |  3 ++
+ 3 files changed, 100 insertions(+)
+ create mode 100644 WinQuake/.gitignore
+ create mode 100644 WinQuake/Makefile.nds
+
+diff --git a/WinQuake/.gitignore b/WinQuake/.gitignore
+new file mode 100644
+index 0000000..fc74557
+--- /dev/null
++++ b/WinQuake/.gitignore
+@@ -0,0 +1,4 @@
++/build/
++/quake.elf
++/quake.nds
++/quake.lst
+diff --git a/WinQuake/Makefile.nds b/WinQuake/Makefile.nds
+new file mode 100644
+index 0000000..d363f73
+--- /dev/null
++++ b/WinQuake/Makefile.nds
+@@ -0,0 +1,93 @@
++#---------------------------------------------------------------------------------
++# Nintendo DS (devkitARM + libnds) build of Quake
++#   make -f Makefile.nds [ICON=icon.bmp] [NITRO_DIR=dir]
++#---------------------------------------------------------------------------------
++ifeq ($(strip $(DEVKITARM)),)
++$(error "Please set DEVKITARM in your environment. export DEVKITARM=<path to>devkitARM")
++endif
++
++GAME_TITLE     := Quake
++GAME_SUBTITLE1 := id Software (1996)
++GAME_SUBTITLE2 := Quake NDS port
++
++TARGET  := quake
++BUILD   := build
++OUTPUT  := $(CURDIR)/$(TARGET)
++
++ICON      ?=
++NITRO_DIR ?=
++GAME_ICON := $(or $(ICON),$(DEVKITPRO)/calico/share/nds-icon.bmp)
++ifneq ($(strip $(NITRO_DIR)),)
++NITRO_FILES := $(NITRO_DIR)
++endif
++
++# Must be set before ds_rules, which prepends the calico library path
++LIBPATHS := -L$(DEVKITPRO)/libnds/lib
++
++include $(DEVKITARM)/ds_rules
++
++SRC_QUAKE := cl_demo cl_input cl_main cl_parse cl_tent chase cmd common console crc cvar draw \
++	host host_cmd keys menu mathlib model net_loop net_main net_none net_vcr \
++	pr_cmds pr_edict pr_exec r_light r_efrag r_part screen sbar sv_main sv_phys sv_move sv_user \
++	zone view wad cd_null snd_dma snd_mem \
++	sys_nds vid_nds in_nds sbar_nds snd_nds r_nds
++
++# Hot code runs from ITCM
++SRC_ITCM := mem_nds world
++
++# The ARM9 has no floating point unit, libgcc's software floating point,
++# which Quake uses all the time, runs from ITCM too: its objects are taken
++# out of libgcc with their code moved there, they are linked before it
++SOFTFLOAT := _arm_addsubsf3 _arm_muldivsf3 _arm_cmpsf2 _arm_fixsfsi \
++	_arm_addsubdf3 _arm_muldivdf3 _arm_cmpdf2 _arm_truncdfsf2 _arm_fixdfsi
++
++OFILES := $(addprefix $(BUILD)/,$(addsuffix .o,$(SRC_QUAKE)) $(addsuffix .itcm.o,$(SRC_ITCM))) \
++	$(addprefix $(BUILD)/softfloat/,$(addsuffix .o,$(SOFTFLOAT)))
++
++ARCH     := -march=armv5te -mtune=arm946e-s -mthumb
++# Quake reads files straight into structs with enums and keeps flag masks in
++# qbooleans, so enums are int sized like on x86, not only as big as their
++# values like the ARM EABI default. Libraries only get enums as arguments.
++# Its globals are defined in headers, which needs common symbols.
++CFLAGS   := -g -O2 -Wall -Wno-dangling-else -Wno-unused-variable -Wno-unused-but-set-variable \
++	-Wno-misleading-indentation -Wno-format-overflow -Wno-pointer-sign -Wno-trigraphs \
++	-Wno-dangling-pointer -Wno-stringop-truncation -Wno-array-parameter -Wno-shift-overflow \
++	-ffunction-sections -fdata-sections -fno-strict-aliasing -fno-short-enums -fcommon -fsingle-precision-constant -std=gnu17 \
++	$(ARCH) -DARM9 -I$(LIBNDS)/include -I$(CALICO)/include
++LDFLAGS  := -specs=ds_arm9.specs -g $(ARCH) -Wl,--no-enum-size-warning -Wl,-Map,$(BUILD)/$(TARGET).map
++LIBS     := -lfilesystem -lfat -lnds9 -lm
++LD       := $(CC)
++
++.PHONY: all clean
++all: $(OUTPUT).nds
++
++# Like the ds_rules default, plus a proper header title (homebrew game code kept)
++$(OUTPUT).nds: $(OUTPUT).elf $(GAME_ICON) $(if $(NITRO_DIR),$(shell find $(NITRO_DIR) -type f))
++	$(SILENTCMD)ndstool -c $@ -9 $< $(_ARM7_ELF) -b $(GAME_ICON) "$(GAME_TITLE);$(GAME_SUBTITLE1);$(GAME_SUBTITLE2)" \
++		-g "####" 00 "$(GAME_TITLE)" $(_ADDFILES)
++	$(SILENTMSG) built ... $(notdir $@)
++
++$(OUTPUT).elf: $(OFILES)
++
++$(BUILD)/%.itcm.o: CFLAGS += -marm -mlong-calls
++$(BUILD)/mem_nds.itcm.o: CFLAGS += -fno-builtin -fno-tree-loop-distribute-patterns
++$(BUILD)/%.itcm.o: %.c | $(BUILD)
++	$(SILENTMSG) $(notdir $<)
++	$(SILENTCMD)$(CC) -MMD -MP $(_EXTRADEFS) $(CFLAGS) -c $< -o $@
++
++$(BUILD)/%.o: %.c | $(BUILD)
++	$(SILENTMSG) $(notdir $<)
++	$(SILENTCMD)$(CC) -MMD -MP $(_EXTRADEFS) $(CFLAGS) -c $< -o $@
++
++$(BUILD)/softfloat/%.o: | $(BUILD)
++	@mkdir -p $(dir $@)
++	$(SILENTCMD)cd $(dir $@) && $(AR) x $(shell $(CC) $(ARCH) -print-libgcc-file-name) $*.o
++	$(SILENTCMD)$(OBJCOPY) --rename-section .text=.itcm $@
++
++$(BUILD):
++	@mkdir -p $@
++
++clean:
++	rm -rf $(BUILD) $(OUTPUT).elf $(OUTPUT).nds $(TARGET).lst
++
++-include $(filter-out $(BUILD)/softfloat/%,$(OFILES:.o=.d))
+diff --git a/WinQuake/quakedef.h b/WinQuake/quakedef.h
+index 7886ad8..a72b2dd 100644
+--- a/WinQuake/quakedef.h
++++ b/WinQuake/quakedef.h
+@@ -78,6 +78,9 @@ void	VID_UnlockBuffer (void);
+ 
+ #define UNUSED(x)	(x = x)	// for pesky compiler / lint warnings
+ 
++// A hot function run from ITCM, the DS ARM9's fast code memory, as ARM code
++#define	HOT_CODE	__attribute__((section(".itcm"), target("arm"), noinline))
++
+ // The server runs at most at this rate on the DS, the client interpolates
+ #define	SERVER_FPS				20
+ 

@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Tue, 6 Oct 2026 07:10:02 +0200
+Subject: [PATCH] Copy memory fast on the DS
+
+mem_nds.c replaces newlib's memcpy and memset, which copy a byte at a
+time in Thumb mode, with word copies from ITCM.
+---
+ WinQuake/mem_nds.c | 94 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 94 insertions(+)
+ create mode 100644 WinQuake/mem_nds.c
+
+diff --git a/WinQuake/mem_nds.c b/WinQuake/mem_nds.c
+new file mode 100644
+index 0000000..1703051
+--- /dev/null
++++ b/WinQuake/mem_nds.c
+@@ -0,0 +1,94 @@
++/*
++Copyright (C) 1996-1997 Id Software, Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++See the GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++*/
++// mem_nds.c -- memcpy and memset for the ARM9
++//
++// newlib's copy a byte at a time in Thumb mode, these move words, eight at a
++// time, or halfwords when only those line up, and run from ITCM. VRAM ignores
++// byte writes, so copies to it need at least the halfwords. Built without builtins, so the compiler doesn't
++// turn the loops back into calls to themselves.
++
++#include <stddef.h>
++#include <stdint.h>
++
++void *memcpy (void *dst, const void *src, size_t n)
++{
++	uint8_t			*d = dst;
++	const uint8_t	*s = src;
++	uint32_t		*dw;
++	const uint32_t	*sw;
++
++	if ((((uintptr_t) d ^ (uintptr_t) s) & 3) == 0)
++	{
++		while (n && ((uintptr_t) d & 3))
++		{
++			*d++ = *s++;
++			n--;
++		}
++		dw = (uint32_t *) d;
++		sw = (const uint32_t *) s;
++		for (; n >= 32; n -= 32, dw += 8, sw += 8)
++		{
++			uint32_t a = sw[0], b = sw[1], c = sw[2], e = sw[3];
++			uint32_t f = sw[4], g = sw[5], h = sw[6], i = sw[7];
++			dw[0] = a; dw[1] = b; dw[2] = c; dw[3] = e;
++			dw[4] = f; dw[5] = g; dw[6] = h; dw[7] = i;
++		}
++		for (; n >= 4; n -= 4)
++			*dw++ = *sw++;
++		d = (uint8_t *) dw;
++		s = (const uint8_t *) sw;
++	}
++	else if ((((uintptr_t) d ^ (uintptr_t) s) & 1) == 0)
++	{
++		if ((uintptr_t) d & 1 && n)
++		{
++			*d++ = *s++;
++			n--;
++		}
++		for (; n >= 2; n -= 2, d += 2, s += 2)
++			*(uint16_t *) d = *(const uint16_t *) s;
++	}
++	while (n--)
++		*d++ = *s++;
++	return dst;
++}
++
++void *memset (void *dst, int c, size_t n)
++{
++	uint8_t		*d = dst;
++	uint32_t	*dw, v = (uint8_t) c * 0x01010101u;
++
++	while (n && ((uintptr_t) d & 3))
++	{
++		*d++ = c;
++		n--;
++	}
++	dw = (uint32_t *) d;
++	for (; n >= 16; n -= 16, dw += 4)
++	{
++		dw[0] = v; dw[1] = v; dw[2] = v; dw[3] = v;
++	}
++	for (; n >= 4; n -= 4)
++		*dw++ = v;
++	d = (uint8_t *) dw;
++	while (n--)
++		*d++ = c;
++	return dst;
++}

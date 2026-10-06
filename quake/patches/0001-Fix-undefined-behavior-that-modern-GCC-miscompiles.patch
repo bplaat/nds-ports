@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: nds-ports <nds-ports@localhost>
-Date: Wed, 30 Sep 2026 14:07:04 +0200
+Date: Tue, 6 Oct 2026 07:09:51 +0200
 Subject: [PATCH] Fix undefined behavior that modern GCC miscompiles
 
 Mod_LoadTexinfo and R_EntityParticles fill two dimensional arrays by

@@ -1,647 +1,193 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: nds-ports <nds-ports@localhost>
-Date: Wed, 30 Sep 2026 15:34:18 +0200
-Subject: [PATCH] Render with the DS 3D hardware
+Date: Tue, 6 Oct 2026 07:09:59 +0200
+Subject: [PATCH] Add the DS 3D renderer
 
-Replaces the software renderer with one on the DS geometry engine
-(r_nds.c) and moves the 2D drawing to the touch screen, which makes the
-game fit in the 4 MiB of the DS and run 10 times as fast.
+r_nds.c replaces the software renderer with one on the DS geometry
+engine, which draws the world, brush and alias models, sprites and
+particles on the top screen.
 
-- The top screen shows the 3D view: world, brush and alias models,
-  sprites and particles. Vertices are 16-bit fixed point world
-  coordinates, surfaces are drawn as quad strips across their polygons.
+- Vertices are 16-bit fixed point world coordinates, surfaces are drawn
+  as quad strips zig-zagging across their polygons, half as many
+  polygons as triangles.
 - Textures stay 8-bit in VRAM banks A, B and D, uploaded at the largest
   mip level that fits when a map loads, with the texture coordinates
-  scaled to their size by the texture matrix. The palette goes to the
+  scaled to their size by the texture matrix. The world leaves 32 KiB to
+  the brush models loaded after it, the ammo and health boxes, which
+  share the textures with the same name. The palette goes to the
   texture palette, so palette shifts stay free. It's twice as bright,
   so the vertex light can overbright like in the software renderer.
 - Light maps become vertex light per light style, so styles animate.
-  Model lighting uses the vertex light of the nearest vertex.
-- The world is traversed in fixed point with frustum clip flags, alias
-  models pack their texture coordinates once per map and light each
-  vertex once, and their light is cached until they move.
-- Quake's 2D drawing (status bar, console, menus, messages) stays in
-  software, in a 320x200 buffer scaled to the touch screen. Only the
-  rows the draw functions changed are copied to VRAM.
-
-To fit in memory the vertexes, edges, surfedges and light maps of brush
-models are freed once the hardware vertices are built, alias skins are
-read from the model file when a map loads instead of kept, the surface
-data is one allocation, planes aren't allocated twice, the pack
-directory isn't on the stack, the thread stack is 64 KiB, particles are
-512, libc gets 64 KiB and small heaps get 448 edicts.
-
-For speed memcpy and memset copy words from ITCM instead of newlib's
-bytes in Thumb mode, the collision code runs from ITCM, AngleVectors
-uses float trigonometry and the sound driver only submits new samples.
-vid_showfps shows the frame rate on the touch screen.
+- T-junctions, a vertex of one face in the middle of an edge of another,
+  left the hardware cracks along those edges: the vertices on the edges
+  of a polygon are added to it, found through a hash of the positions.
+  The hardware tells the side a polygon faces from its first three
+  vertices and with the wrong one leaves the edges that run more across
+  than down unfilled, so the strip of a surface starts where they aren't
+  in a line for any of its quads. Surfaces are drawn until the eye is 1.5
+  units behind them, the integer plane tests and the matrices round the
+  eye differently, and only after both sides of their node, whose leaves
+  mark them, so one seen edge on leaves no crack either.
+  Dynamic lights (muzzle flashes, rockets, explosions) light the
+  vertices of the surfaces R_PushDlights marked. R_LightPoint uses the
+  vertex light of the nearest vertex.
+- The sky has both layers, with texture coordinates following the
+  direction from the eye like GLQuake, the front layer is drawn on the
+  back one with the depth test for equal.
+- Alias models are joined into triangle strips when a map loads, like
+  GLQuake's gl_mesh.c without fans, which the hardware lacks, finding
+  the next triangle of a strip through a table of the edges, and their
+  byte vertices go doubled as 10-bit vertices, one write instead of two.
+  Their light is cached until they move. Every texel of a skin its
+  triangles don't cover, worked out at full size, takes the color of a
+  covered one, as the resampled skin is sampled a little outside them,
+  like the blue around the shotguns.
+- The hardware data of a surface is its vertex and style counts followed
+  by its texture coordinates, vertex indices and light, without pointers.
+  Textures are resampled in fixed point. When a map has loaded the
+  temporary memory is freed, so the cache has all the room there is.
+- Alias models are placed relative to the eye, the view model in finer
+  units, so their position isn't the difference of two rounded ones and
+  the gun doesn't wobble while turning. The depth is w, to a 4096th of
+  the distance, where z / w let monsters right behind doors show through
+  them, so the near plane can be 1 unit away. Swimming, the eye is kept a
+  near plane away from the surface, which would be cut out of view.
+  The world's w is 3 times the gun's, like the software renderer's depth
+  scale for it, so the gun doesn't poke into walls. The crosshair is drawn
+  in whole pixels of the screen, 7 by 7, its edges rounded the way the
+  hardware truncates them. The view is dimmed behind the menu and its questions.
+  Translations are rounded to the hardware's fixed point, the projection
+  is only worked out again when the field of view changes.
+- The world is traversed in fixed point with frustum clip flags, it and
+  the culling, surface lighting, alias models and particles run from
+  ITCM as ARM code.
 ---
- WinQuake/Makefile.nds |   15 +-
- WinQuake/common.c     |    4 +-
- WinQuake/draw.c       |   15 +
- WinQuake/mathlib.c    |   12 +-
- WinQuake/mem_nds.c    |   94 +++
- WinQuake/model.c      |   86 +-
- WinQuake/model.h      |   29 +
- WinQuake/r_light.c    |   11 +
- WinQuake/r_nds.c      | 1855 +++++++++++++++++++++++++++++++++++++++++
- WinQuake/r_part.c     |    2 +-
- WinQuake/snd_dma.c    |    6 +-
- WinQuake/snd_nds.c    |   39 +-
- WinQuake/sound.h      |    4 +
- WinQuake/sv_main.c    |    5 +
- WinQuake/sys.h        |    5 +
- WinQuake/sys_nds.c    |   24 +-
- WinQuake/vid.h        |   11 +
- WinQuake/vid_nds.c    |  201 +++--
- 18 files changed, 2325 insertions(+), 93 deletions(-)
- create mode 100644 WinQuake/mem_nds.c
+ WinQuake/model.h   |   12 +-
+ WinQuake/r_light.c |   36 +-
+ WinQuake/r_nds.c   | 2669 ++++++++++++++++++++++++++++++++++++++++++++
+ WinQuake/vid.h     |    3 +
+ WinQuake/view.c    |    7 -
+ 5 files changed, 2687 insertions(+), 40 deletions(-)
  create mode 100644 WinQuake/r_nds.c
 
-diff --git a/WinQuake/Makefile.nds b/WinQuake/Makefile.nds
-index ecf31fa..e01bc5e 100644
---- a/WinQuake/Makefile.nds
-+++ b/WinQuake/Makefile.nds
-@@ -27,15 +27,13 @@ LIBPATHS := -L$(DEVKITPRO)/libnds/lib
- include $(DEVKITARM)/ds_rules
- 
- SRC_QUAKE := cl_demo cl_input cl_main cl_parse cl_tent chase cmd common console crc cvar draw \
--	d_edge d_fill d_init d_modech d_part d_polyse d_sky d_sprite d_surf d_vars d_zpoint \
--	host host_cmd keys menu mathlib model net_loop net_main net_none net_vcr nonintel \
--	pr_cmds pr_edict pr_exec r_aclip r_alias r_bsp r_light r_draw r_efrag r_edge r_misc \
--	r_main r_sky r_sprite r_surf r_part r_vars screen sbar sv_main sv_phys sv_move sv_user \
--	zone view wad world cd_null snd_dma snd_mem snd_mix \
--	sys_nds vid_nds in_nds snd_nds
-+	host host_cmd keys menu mathlib model net_loop net_main net_none net_vcr \
-+	pr_cmds pr_edict pr_exec r_light r_efrag r_part screen sbar sv_main sv_phys sv_move sv_user \
-+	zone view wad cd_null snd_dma snd_mem snd_mix \
-+	sys_nds vid_nds in_nds snd_nds r_nds
- 
--# Hot inner loops (span drawers) run from ITCM
--SRC_ITCM := d_scan
-+# Hot code runs from ITCM
-+SRC_ITCM := mem_nds world
- 
- OFILES := $(addprefix $(BUILD)/,$(addsuffix .o,$(SRC_QUAKE)) $(addsuffix .itcm.o,$(SRC_ITCM)))
- 
-@@ -65,6 +63,7 @@ $(OUTPUT).nds: $(OUTPUT).elf $(GAME_ICON) $(shell find $(NITRO_DIR) -type f 2>/d
- $(OUTPUT).elf: $(OFILES)
- 
- $(BUILD)/%.itcm.o: CFLAGS += -marm -mlong-calls
-+$(BUILD)/mem_nds.itcm.o: CFLAGS += -fno-builtin -fno-tree-loop-distribute-patterns
- $(BUILD)/%.itcm.o: %.c | $(BUILD)
- 	$(SILENTMSG) $(notdir $<)
- 	$(SILENTCMD)$(CC) -MMD -MP $(_EXTRADEFS) $(CFLAGS) -c $< -o $@
-diff --git a/WinQuake/common.c b/WinQuake/common.c
-index 63f2441..30a24c2 100644
---- a/WinQuake/common.c
-+++ b/WinQuake/common.c
-@@ -1624,7 +1624,7 @@ pack_t *COM_LoadPackFile (char *packfile)
- 	int                             numpackfiles;
- 	pack_t                  *pack;
- 	int                             packhandle;
--	dpackfile_t             info[MAX_FILES_IN_PACK];
-+	dpackfile_t             *info;
- 	unsigned short          crc;
- 
- 	if (Sys_FileOpenRead (packfile, &packhandle) == -1)
-@@ -1649,6 +1649,8 @@ pack_t *COM_LoadPackFile (char *packfile)
- 
- 	newfiles = Hunk_AllocName (numpackfiles * sizeof(packfile_t), "packfile");
- 
-+	// the directory can be 128 KiB, too much for the stack
-+	info = Hunk_TempAlloc (header.dirlen);
- 	Sys_FileSeek (packhandle, header.dirofs);
- 	Sys_FileRead (packhandle, (void *)info, header.dirlen);
- 
-diff --git a/WinQuake/draw.c b/WinQuake/draw.c
-index 00ee0b4..0d5cec7 100644
---- a/WinQuake/draw.c
-+++ b/WinQuake/draw.c
-@@ -34,6 +34,13 @@ typedef struct {
- static rectdesc_t	r_rectdesc;
- 
- byte		*draw_chars;				// 8*8 graphic characters
-+#ifdef __NDS__
-+// only the changed rows are copied to the touch screen
-+#define MARK_ROWS(y,h)	VID_MarkRows (y, h)
-+#else
-+#define MARK_ROWS(y,h)
-+#endif
-+
- qpic_t		*draw_disc;
- qpic_t		*draw_backtile;
- 
-@@ -144,6 +151,7 @@ void Draw_Character (int x, int y, int num)
- 	
- 	if (y <= -8)
- 		return;			// totally off screen
-+	MARK_ROWS (y, 8);
- 
- #ifdef PARANOID
- 	if (y > vid.height - 8 || x < 0 || x > vid.width - 8)
-@@ -299,6 +307,7 @@ void Draw_Pic (int x, int y, qpic_t *pic)
- 	{
- 		Sys_Error ("Draw_Pic: bad coordinates");
- 	}
-+	MARK_ROWS (y, pic->height);
- 
- 	source = pic->data;
- 
-@@ -348,6 +357,7 @@ void Draw_TransPic (int x, int y, qpic_t *pic)
- 	{
- 		Sys_Error ("Draw_TransPic: bad coordinates");
- 	}
-+	MARK_ROWS (y, pic->height);
- 		
- 	source = pic->data;
- 
-@@ -435,6 +445,7 @@ void Draw_TransPicTranslate (int x, int y, qpic_t *pic, byte *translation)
- 	{
- 		Sys_Error ("Draw_TransPic: bad coordinates");
- 	}
-+	MARK_ROWS (y, pic->height);
- 		
- 	source = pic->data;
- 
-@@ -546,6 +557,7 @@ void Draw_ConsoleBackground (int lines)
- 	char			ver[100];
- 
- 	conback = Draw_CachePic ("gfx/conback.lmp");
-+	MARK_ROWS (0, lines);
- 
- // hack the version number directly into the pic
- #ifdef _WIN32
-@@ -747,6 +759,7 @@ void Draw_TileClear (int x, int y, int w, int h)
- 	r_rectdesc.rect.y = y;
- 	r_rectdesc.rect.width = w;
- 	r_rectdesc.rect.height = h;
-+	MARK_ROWS (y, h);
- 
- 	vr.y = r_rectdesc.rect.y;
- 	height = r_rectdesc.rect.height;
-@@ -816,6 +829,7 @@ void Draw_Fill (int x, int y, int w, int h, int c)
- 	unsigned		uc;
- 	int				u, v;
- 
-+	MARK_ROWS (y, h);
- 	if (r_pixbytes == 1)
- 	{
- 		dest = vid.buffer + y*vid.rowbytes + x;
-@@ -849,6 +863,7 @@ void Draw_FadeScreen (void)
- 	VID_UnlockBuffer ();
- 	S_ExtraUpdate ();
- 	VID_LockBuffer ();
-+	MARK_ROWS (0, vid.height);
- 
- 	for (y=0 ; y<vid.height ; y++)
- 	{
-diff --git a/WinQuake/mathlib.c b/WinQuake/mathlib.c
-index 9f5d644..6047cc6 100644
---- a/WinQuake/mathlib.c
-+++ b/WinQuake/mathlib.c
-@@ -289,18 +289,24 @@ if (sides == 0)
- #endif
- 
- 
-+#ifdef __NDS__
-+// without an FPU the float versions are a lot cheaper than the double ones
-+#define	sin(x)	sinf(x)
-+#define	cos(x)	cosf(x)
-+#endif
-+
- void AngleVectors (vec3_t angles, vec3_t forward, vec3_t right, vec3_t up)
- {
- 	float		angle;
- 	float		sr, sp, sy, cr, cp, cy;
- 	
--	angle = angles[YAW] * (M_PI*2 / 360);
-+	angle = angles[YAW] * (float)(M_PI*2 / 360);
- 	sy = sin(angle);
- 	cy = cos(angle);
--	angle = angles[PITCH] * (M_PI*2 / 360);
-+	angle = angles[PITCH] * (float)(M_PI*2 / 360);
- 	sp = sin(angle);
- 	cp = cos(angle);
--	angle = angles[ROLL] * (M_PI*2 / 360);
-+	angle = angles[ROLL] * (float)(M_PI*2 / 360);
- 	sr = sin(angle);
- 	cr = cos(angle);
- 
-diff --git a/WinQuake/mem_nds.c b/WinQuake/mem_nds.c
-new file mode 100644
-index 0000000..1703051
---- /dev/null
-+++ b/WinQuake/mem_nds.c
-@@ -0,0 +1,94 @@
-+/*
-+Copyright (C) 1996-1997 Id Software, Inc.
-+
-+This program is free software; you can redistribute it and/or
-+modify it under the terms of the GNU General Public License
-+as published by the Free Software Foundation; either version 2
-+of the License, or (at your option) any later version.
-+
-+This program is distributed in the hope that it will be useful,
-+but WITHOUT ANY WARRANTY; without even the implied warranty of
-+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-+
-+See the GNU General Public License for more details.
-+
-+You should have received a copy of the GNU General Public License
-+along with this program; if not, write to the Free Software
-+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
-+
-+*/
-+// mem_nds.c -- memcpy and memset for the ARM9
-+//
-+// newlib's copy a byte at a time in Thumb mode, these move words, eight at a
-+// time, or halfwords when only those line up, and run from ITCM. VRAM ignores
-+// byte writes, so copies to it need at least the halfwords. Built without builtins, so the compiler doesn't
-+// turn the loops back into calls to themselves.
-+
-+#include <stddef.h>
-+#include <stdint.h>
-+
-+void *memcpy (void *dst, const void *src, size_t n)
-+{
-+	uint8_t			*d = dst;
-+	const uint8_t	*s = src;
-+	uint32_t		*dw;
-+	const uint32_t	*sw;
-+
-+	if ((((uintptr_t) d ^ (uintptr_t) s) & 3) == 0)
-+	{
-+		while (n && ((uintptr_t) d & 3))
-+		{
-+			*d++ = *s++;
-+			n--;
-+		}
-+		dw = (uint32_t *) d;
-+		sw = (const uint32_t *) s;
-+		for (; n >= 32; n -= 32, dw += 8, sw += 8)
-+		{
-+			uint32_t a = sw[0], b = sw[1], c = sw[2], e = sw[3];
-+			uint32_t f = sw[4], g = sw[5], h = sw[6], i = sw[7];
-+			dw[0] = a; dw[1] = b; dw[2] = c; dw[3] = e;
-+			dw[4] = f; dw[5] = g; dw[6] = h; dw[7] = i;
-+		}
-+		for (; n >= 4; n -= 4)
-+			*dw++ = *sw++;
-+		d = (uint8_t *) dw;
-+		s = (const uint8_t *) sw;
-+	}
-+	else if ((((uintptr_t) d ^ (uintptr_t) s) & 1) == 0)
-+	{
-+		if ((uintptr_t) d & 1 && n)
-+		{
-+			*d++ = *s++;
-+			n--;
-+		}
-+		for (; n >= 2; n -= 2, d += 2, s += 2)
-+			*(uint16_t *) d = *(const uint16_t *) s;
-+	}
-+	while (n--)
-+		*d++ = *s++;
-+	return dst;
-+}
-+
-+void *memset (void *dst, int c, size_t n)
-+{
-+	uint8_t		*d = dst;
-+	uint32_t	*dw, v = (uint8_t) c * 0x01010101u;
-+
-+	while (n && ((uintptr_t) d & 3))
-+	{
-+		*d++ = c;
-+		n--;
-+	}
-+	dw = (uint32_t *) d;
-+	for (; n >= 16; n -= 16, dw += 4)
-+	{
-+		dw[0] = v; dw[1] = v; dw[2] = v; dw[3] = v;
-+	}
-+	for (; n >= 4; n -= 4)
-+		*dw++ = v;
-+	d = (uint8_t *) dw;
-+	while (n--)
-+		*d++ = c;
-+	return dst;
-+}
-diff --git a/WinQuake/model.c b/WinQuake/model.c
-index 9d0d292..2bcef63 100644
---- a/WinQuake/model.c
-+++ b/WinQuake/model.c
-@@ -37,6 +37,7 @@ byte	mod_novis[MAX_MAP_LEAFS/8];
- 
- FILE	*mod_file;		// the brush model being loaded
- int		mod_filebase;
-+byte	*mod_aliasfile;	// the alias model being loaded
- 
- #define	MAX_MOD_KNOWN	256
- model_t	mod_known[MAX_MOD_KNOWN];
-@@ -377,10 +378,36 @@ void *Mod_LoadLump (lump_t *l)
- 	void	*buf;
- 
- 	buf = Hunk_TempAlloc (l->filelen);
-+	if (!buf)
-+		Sys_Error ("Mod_LoadLump: not enough memory for %s", loadmodel->name);
- 	Mod_ReadLump (l, 0, buf, l->filelen);
- 	return buf;
- }
- 
-+/*
-+=================
-+Mod_AllocGeometry
-+
-+On the DS the vertexes, edges and surfedges are only needed while loading,
-+the 3D hardware gets its own copy of the vertices, so they go to the high
-+hunk to be freed again. They are allocated before their lump is read, a high
-+allocation frees the temporary memory.
-+=================
-+*/
-+void *Mod_AllocGeometry (int size)
-+{
-+#ifdef __NDS__
-+	void	*buf;
-+
-+	buf = Hunk_HighAllocName (size, loadname);
-+	if (!buf)
-+		Sys_Error ("Mod_AllocGeometry: not enough memory for %s", loadmodel->name);
-+	return buf;
-+#else
-+	return Hunk_AllocName (size, loadname);
-+#endif
-+}
-+
- 
- /*
- =================
-@@ -423,6 +450,17 @@ void Mod_LoadTextures (lump_t *l)
- 		
- 		if ( (mt.width & 15) || (mt.height & 15) )
- 			Sys_Error ("Texture %s is not 16 aligned", mt.name);
-+#ifdef __NDS__
-+		// the pixels go to VRAM, R_LoadTextures reads them from the lump
-+		tx = Hunk_AllocName (sizeof(texture_t), loadname );
-+		loadmodel->textures[i] = tx;
-+
-+		memcpy (tx->name, mt.name, sizeof(tx->name));
-+		tx->width = mt.width;
-+		tx->height = mt.height;
-+		for (j=0 ; j<MIPLEVELS ; j++)
-+			tx->offsets[j] = dataofs[i] + mt.offsets[j];
-+#else
- 		pixels = mt.width*mt.height/64*85;
- 		tx = Hunk_AllocName (sizeof(texture_t) +pixels, loadname );
- 		loadmodel->textures[i] = tx;
-@@ -437,7 +475,11 @@ void Mod_LoadTextures (lump_t *l)
- 		
- 		if (!Q_strncmp(mt.name,"sky",3))
- 			R_InitSky (tx);
-+#endif
- 	}
-+#ifdef __NDS__
-+	R_LoadTextures (loadmodel->textures, nummiptex, l);
-+#endif
- 
- //
- // sequence the animations
-@@ -545,7 +587,12 @@ void Mod_LoadLighting (lump_t *l)
- 		loadmodel->lightdata = NULL;
- 		return;
- 	}
-+#ifdef __NDS__
-+	// R_BuildSurfaces makes vertex light out of it, then it's freed
-+	loadmodel->lightdata = Mod_AllocGeometry (l->filelen);
-+#else
- 	loadmodel->lightdata = Hunk_AllocName ( l->filelen, loadname);	
-+#endif
- 	Mod_ReadLump (l, 0, loadmodel->lightdata, l->filelen);
- }
- 
-@@ -595,11 +642,11 @@ void Mod_LoadVertexes (lump_t *l)
- 	mvertex_t	*out;
- 	int			i, count;
- 
--	in = Mod_LoadLump (l);
- 	if (l->filelen % sizeof(*in))
- 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
- 	count = l->filelen / sizeof(*in);
--	out = Hunk_AllocName ( count*sizeof(*out), loadname);	
-+	out = Mod_AllocGeometry ( count*sizeof(*out));
-+	in = Mod_LoadLump (l);
- 
- 	loadmodel->vertexes = out;
- 	loadmodel->numvertexes = count;
-@@ -659,11 +706,11 @@ void Mod_LoadEdges (lump_t *l)
- 	medge_t *out;
- 	int 	i, count;
- 
--	in = Mod_LoadLump (l);
- 	if (l->filelen % sizeof(*in))
- 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
- 	count = l->filelen / sizeof(*in);
--	out = Hunk_AllocName ( (count + 1) * sizeof(*out), loadname);	
-+	out = Mod_AllocGeometry ( (count + 1) * sizeof(*out));
-+	in = Mod_LoadLump (l);
- 
- 	loadmodel->edges = out;
- 	loadmodel->numedges = count;
-@@ -1106,11 +1153,11 @@ void Mod_LoadSurfedges (lump_t *l)
- 	int		i, count;
- 	int		*in, *out;
- 	
--	in = Mod_LoadLump (l);
- 	if (l->filelen % sizeof(*in))
- 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
- 	count = l->filelen / sizeof(*in);
--	out = Hunk_AllocName ( count*sizeof(*out), loadname);	
-+	out = Mod_AllocGeometry ( count*sizeof(*out));
-+	in = Mod_LoadLump (l);
- 
- 	loadmodel->surfedges = out;
- 	loadmodel->numsurfedges = count;
-@@ -1136,7 +1183,7 @@ void Mod_LoadPlanes (lump_t *l)
- 	if (l->filelen % sizeof(*in))
- 		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
- 	count = l->filelen / sizeof(*in);
--	out = Hunk_AllocName ( count*2*sizeof(*out), loadname);	
-+	out = Hunk_AllocName ( count*sizeof(*out), loadname);
- 	
- 	loadmodel->planes = out;
- 	loadmodel->numplanes = count;
-@@ -1185,6 +1232,9 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
- 	int			i, j;
- 	dheader_t	*header;
- 	dmodel_t 	*bm;
-+#ifdef __NDS__
-+	int			geometrymark;
-+#endif
- 	
- 	loadmodel->type = mod_brush;
- 	
-@@ -1199,7 +1249,9 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
- 		((int *)header)[i] = LittleLong ( ((int *)header)[i]);
- 
- // load into heap
--	
-+#ifdef __NDS__
-+	geometrymark = Hunk_HighMark ();
-+#endif
- 	Mod_LoadVertexes (&header->lumps[LUMP_VERTEXES]);
- 	Mod_LoadEdges (&header->lumps[LUMP_EDGES]);
- 	Mod_LoadSurfedges (&header->lumps[LUMP_SURFEDGES]);
-@@ -1208,6 +1260,17 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
- 	Mod_LoadPlanes (&header->lumps[LUMP_PLANES]);
- 	Mod_LoadTexinfo (&header->lumps[LUMP_TEXINFO]);
- 	Mod_LoadFaces (&header->lumps[LUMP_FACES]);
-+#ifdef __NDS__
-+	// the 3D hardware has its own copy of the geometry
-+	R_BuildSurfaces (loadmodel);
-+	Hunk_FreeToHighMark (geometrymark);
-+	loadmodel->vertexes = NULL;
-+	loadmodel->edges = NULL;
-+	loadmodel->surfedges = NULL;
-+	loadmodel->lightdata = NULL;
-+	for (i=0 ; i<loadmodel->numsurfaces ; i++)
-+		loadmodel->surfaces[i].samples = NULL;
-+#endif
- 	Mod_LoadMarksurfaces (&header->lumps[LUMP_MARKSURFACES]);
- 	Mod_LoadVisibility (&header->lumps[LUMP_VISIBILITY]);
- 	Mod_LoadLeafs (&header->lumps[LUMP_LEAFS]);
-@@ -1390,6 +1453,12 @@ void * Mod_LoadAliasSkin (void * pin, int *pskinindex, int skinsize,
- 	byte	*pskin, *pinskin;
- 	unsigned short	*pusskin;
- 
-+#ifdef __NDS__
-+	// the skins go to VRAM, R_NewMap reads them from this offset in the file
-+	*pskinindex = (byte *)pin - mod_aliasfile;
-+	return (byte *)pin + skinsize;
-+#endif
-+
- 	pskin = Hunk_AllocName (skinsize * r_pixbytes, loadname);
- 	pinskin = (byte *)pin;
- 	*pskinindex = (byte *)pskin - (byte *)pheader;
-@@ -1495,6 +1564,7 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
- 	
- 	start = Hunk_LowMark ();
- 
-+	mod_aliasfile = buffer;
- 	pinmodel = (mdl_t *)buffer;
- 
- 	version = LittleLong (pinmodel->version);
 diff --git a/WinQuake/model.h b/WinQuake/model.h
-index 2e89862..a57490e 100644
+index be9b165..7c398ba 100644
 --- a/WinQuake/model.h
 +++ b/WinQuake/model.h
-@@ -63,6 +63,11 @@ typedef struct mplane_s
+@@ -63,6 +63,9 @@ typedef struct mplane_s
  	byte	type;			// for texture axis selection and fast side tests
  	byte	signbits;		// signx + signy<<1 + signz<<1
  	byte	pad[2];
-+#ifdef __NDS__
 +	// fixed point for the renderer: side = inormal * origin * 8 - idist
 +	int		inormal[3];		// normal * 16384
 +	int		idist;			// dist * 8 * 16384
-+#endif
  } mplane_t;
  
  typedef struct texture_s
-@@ -74,6 +79,12 @@ typedef struct texture_s
+@@ -74,6 +77,10 @@ typedef struct texture_s
  	struct texture_s *anim_next;		// in the animation sequence
  	struct texture_s *alternate_anims;	// bmodels in frmae 1 use these
  	unsigned	offsets[MIPLEVELS];		// four mip maps stored
-+#ifdef __NDS__
 +	// the pixels are in VRAM, offsets are where the mip maps are in the lump
 +	unsigned	gxparam[2];		// hardware texture, sky has a second layer
 +	int			gxscale[2];		// texture matrix scale to the VRAM size
 +	struct msurface_s	*texturechain;	// surfaces to draw this frame
-+#endif
  } texture_t;
  
  
-@@ -113,7 +124,12 @@ typedef struct msurface_s
+@@ -113,7 +120,8 @@ typedef struct msurface_s
  	int			numedges;	// are backwards edges
  	
  // surface generation data
-+#ifdef __NDS__
+-	struct surfcache_s	*cachespots[MIPLEVELS];
 +	struct gxsurf_s		*gx;		// vertices for the 3D hardware
 +	struct msurface_s	*texturechain;
-+#else
- 	struct surfcache_s	*cachespots[MIPLEVELS];
-+#endif
  
  	short		texturemins[2];
  	short		extents[2];
-@@ -330,6 +346,10 @@ typedef struct model_s
+@@ -330,6 +338,8 @@ typedef struct model_s
  
  	int			numvertexes;
  	mvertex_t	*vertexes;
-+#ifdef __NDS__
 +	unsigned	*gxvertexes;	// numvertexes packed XY, Z pairs
 +	struct gxalias_s	*gxalias;	// alias skins in VRAM and more, R_NewMap sets it
-+#endif
  
  	int			numedges;
  	medge_t		*edges;
-@@ -379,4 +399,13 @@ void	Mod_TouchModel (char *name);
- mleaf_t *Mod_PointInLeaf (float *p, model_t *model);
- byte	*Mod_LeafPVS (mleaf_t *leaf, model_t *model);
- 
-+#ifdef __NDS__
-+// model.c
-+void	Mod_ReadLump (lump_t *l, int ofs, void *dest, int len);
-+
-+// r_nds.c, uploads textures to VRAM and builds the 3D hardware vertices
-+void	R_LoadTextures (texture_t **textures, int numtextures, lump_t *l);
-+void	R_BuildSurfaces (model_t *mod);
-+#endif
-+
- #endif	// __MODEL__
 diff --git a/WinQuake/r_light.c b/WinQuake/r_light.c
-index f735d50..ef17aee 100644
+index f735d50..b33d36e 100644
 --- a/WinQuake/r_light.c
 +++ b/WinQuake/r_light.c
-@@ -22,6 +22,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+@@ -22,6 +22,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  #include "quakedef.h"
  #include "r_local.h"
  
-+#ifdef __NDS__
 +int R_SurfaceLight (msurface_t *surf, int ds, int dt);
-+#endif
 +
  int	r_dlightframecount;
  
  
-@@ -203,6 +207,11 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+@@ -149,9 +151,6 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+ 	int			s, t, ds, dt;
+ 	int			i;
+ 	mtexinfo_t	*tex;
+-	byte		*lightmap;
+-	unsigned	scale;
+-	int			maps;
+ 
+ 	if (node->contents < 0)
+ 		return -1;		// didn't hit anything
+@@ -203,32 +202,8 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
  		if ( ds > surf->extents[0] || dt > surf->extents[1] )
  			continue;
  
-+#ifdef __NDS__
+-		if (!surf->samples)
+-			return 0;
+-
+-		ds >>= 4;
+-		dt >>= 4;
+-
+-		lightmap = surf->samples;
+-		r = 0;
+-		if (lightmap)
+-		{
+-
+-			lightmap += dt * ((surf->extents[0]>>4)+1) + ds;
+-
+-			for (maps = 0 ; maps < MAXLIGHTMAPS && surf->styles[maps] != 255 ;
+-					maps++)
+-			{
+-				scale = d_lightstylevalue[surf->styles[maps]];
+-				r += *lightmap * scale;
+-				lightmap += ((surf->extents[0]>>4)+1) *
+-						((surf->extents[1]>>4)+1);
+-			}
+-			
+-			r >>= 8;
+-		}
+-		
+-		return r;
 +		// the light maps became vertex light
 +		return R_SurfaceLight (surf, ds, dt);
-+#endif
-+
- 		if (!surf->samples)
- 			return 0;
+ 	}
  
-@@ -240,8 +249,10 @@ int R_LightPoint (vec3_t p)
+ // go down back side
+@@ -240,9 +215,6 @@ int R_LightPoint (vec3_t p)
  	vec3_t		end;
  	int			r;
  	
-+#ifndef __NDS__
- 	if (!cl.worldmodel->lightdata)
- 		return 255;
-+#endif
- 	
+-	if (!cl.worldmodel->lightdata)
+-		return 255;
+-	
  	end[0] = p[0];
  	end[1] = p[1];
+ 	end[2] = p[2] - 2048;
 diff --git a/WinQuake/r_nds.c b/WinQuake/r_nds.c
 new file mode 100644
-index 0000000..7534cc2
+index 0000000..92b7c57
 --- /dev/null
 +++ b/WinQuake/r_nds.c
-@@ -0,0 +1,1855 @@
+@@ -0,0 +1,2669 @@
 +/*
 +Copyright (C) 1996-1997 Id Software, Inc.
 +
@@ -688,7 +234,7 @@ index 0000000..7534cc2
 +#define	TEXMEM_MODELS		0x40000
 +#define	TEXMEM_END			0x60000
 +#define	TEXMEM_NOTEXTURE	256		// the checkerboard stays at the start
-+#define	TEXMEM_INSTANCES	(16 * 1024)	// kept for brush models after the world
++#define	TEXMEM_INSTANCES	(32 * 1024)	// kept for brush models after the world
 +
 +#define	MAX_TEXSIZE			256
 +#define	MAX_SKINSIZE		128
@@ -697,6 +243,30 @@ index 0000000..7534cc2
 +#define	VERTEX_SCALE		8
 +#define	MATRIX_SCALE_W		(1.0 / 512)
 +
++// The view model's matrix is relative to the eye in 1/32 world units: in the
++// 1/512 of the world its position and axes were rounded so much that the gun
++// wobbled while turning
++#define	VIEWMODEL_UNITS		16
++
++// The depth buffer holds w, the distance, to at least a 4096th of the
++// largest one of a polygon, 1/8 unit at 512 units. z / w had 15 bits for all
++// of it, 2 units at 512 and 8 at 1024: monsters right behind doors showed
++// through them. The world's projection scales w to 3 times the gun's per
++// world unit, so the gun stays in front of walls like with the software
++// renderer's depth scale for it
++#define	WORLD_W_SCALE		(VIEWMODEL_UNITS * 3)
++
++// w of the rectangles drawn on the screen, in front of the near planes, 384
++// for the world and 512 for the gun. The least w with whole pixels across,
++// rows are rounded down the screen, the hardware truncates to whole pixels
++#define	SCREEN_W			128
++
++// How dark the view gets behind the menu, the alpha of black of 31
++#define	DIM_ALPHA			14
++
++// Poly format bit for the depth test for equal instead of less
++#define	POLY_DEPTH_EQUAL	(1 << 14)
++
 +// Brush texture coordinates are stored in 1/8 texels, the hardware reads 1/16
 +#define	ST_SCALE			8
 +
@@ -704,7 +274,18 @@ index 0000000..7534cc2
 +// double like the software renderer's overbright light
 +#define	GX_NORMAL_LIGHT		15
 +
-+#define	NEAR_PLANE			(4.0 / 512)
++// Surfaces are left out when the eye is this far behind them: the integer
++// plane tests are up to a unit off for slanted planes far from the origin,
++// the eye of the matrices 1/8, so a surface seen edge on could face the one
++// and not the other, a crack. The back of one is hidden behind its solid.
++#define	BACKFACE_DIST		1.5
++#define	BACKFACE_DIST_I		((int) (BACKFACE_DIST * VERTEX_SCALE * 16384))	// for the planes' inormal and idist
++
++// The near plane is closer than the 4 units of GLQuake, which z / w needed:
++// swimming, the eye gets that close to the surface of the liquid. The gun
++// keeps 4 units
++#define	NEAR_PLANE			(1.0 / 512)
++#define	VIEWMODEL_NEAR		(4.0 / 512)
 +#define	FAR_PLANE			(8192.0 / 512)
 +
 +#define	MAX_SURFVERTS		128
@@ -712,6 +293,7 @@ index 0000000..7534cc2
 +
 +#define	F32(x)				((int) ((x) * 4096))
 +#define	MIN(a,b)			((a) < (b) ? (a) : (b))
++#define	MAX(a,b)			((a) > (b) ? (a) : (b))
 +#define	CLAMP(lo,x,hi)		((x) < (lo) ? (lo) : (x) > (hi) ? (hi) : (x))
 +#define	GRAY(c)				((c) | ((c) << 5) | ((c) << 10))
 +
@@ -721,17 +303,23 @@ index 0000000..7534cc2
 +#define	NUMVERTEXNORMALS	162
 +#define	SHADEDOT_QUANT		16
 +
-+extern vrect_t	scr_vrect;
++extern cvar_t	crosshair, cl_crossx, cl_crossy;
++extern qboolean	scr_drawdialog;
 +
 +
++// The hardware data of a surface: the packed texture coordinates, then the
++// vertex indices into the model's gxvertexes, word aligned, then the light
++// samples, [numstyles][numverts]
 +typedef struct gxsurf_s
 +{
-+	int				numverts;
-+	int				numstyles;		// light samples per vertex
-+	unsigned		*st;			// packed texture coordinates
-+	unsigned short	*verts;			// into the model's gxvertexes
-+	byte			*light;			// [numstyles][numverts]
++	byte			numverts;
++	byte			numstyles;		// light samples per vertex
++	unsigned short	pad;
++	unsigned		st[];
 +} gxsurf_t;
++
++#define	GX_VERTS(gx)	((unsigned short *) ((gx)->st + (gx)->numverts))
++#define	GX_LIGHT(gx)	((byte *) GX_VERTS (gx) + (((gx)->numverts * 2 + 3) & ~3))
 +
 +// Hardware textures of a skin or sprite frame
 +typedef struct
@@ -747,6 +335,7 @@ index 0000000..7534cc2
 +typedef struct gxalias_s
 +{
 +	unsigned	*st;		// [2][numverts], the back adds half the skin width on the seam
++	u16			*strips;	// vertex count, front side, the vertices, ..., 0
 +	int			numskins;
 +	struct
 +	{
@@ -833,6 +422,12 @@ index 0000000..7534cc2
 +cvar_t	r_novis = {"r_novis", "0"};
 +
 +static int		tex_world, tex_models;		// next free texture VRAM
++
++// The textures of the brush models after the world, the ammo and health
++// boxes share some, a texture is uploaded once
++#define	MAX_SHARED_TEXTURES	64
++static texture_t	*shared_textures[MAX_SHARED_TEXTURES];
++static int		num_shared_textures;
 +static qboolean	tex_mapped;					// VRAM banks mapped for the CPU
 +static byte		tex_black;					// darkest color that isn't 0
 +static modeltex_t	modeltex[MAX_MODELTEXTURES];
@@ -841,10 +436,11 @@ index 0000000..7534cc2
 +static u16		gx_dots[SHADEDOT_QUANT][NUMVERTEXNORMALS];	// 8.8
 +static int		gx_particles;
 +static u16		alias_color[MAXALIASVERTS];
-+static unsigned	alias_xy[MAXALIASVERTS], alias_z[MAXALIASVERTS];
++static unsigned	alias_xyz[MAXALIASVERTS];	// as 10-bit vertices, 4.6 fixed point
 +static lightcache_t	lightcache[LIGHTCACHE_SIZE];
 +static dlight_t	*r_dlights[MAX_DLIGHTS];	// the ones alive this frame
 +static int		r_numdlights;
++static int		r_dlight_i[MAX_DLIGHTS][4];	// origin and radius in world units
 +
 +static int		c_brush_polys, c_alias_polys;
 +
@@ -857,6 +453,14 @@ index 0000000..7534cc2
 +*/
 +
 +// Nearest power of two, where the sizes Quake has in between round down
++// F32 rounded to nearest, for translations, the error of F32 would be up to
++// 1/8 of a world unit
++static inline int R_RoundF32 (float x)
++{
++	x *= 4096;
++	return x < 0 ? (int) (x - 0.5f) : (int) (x + 0.5f);
++}
++
 +static int R_TexSize (int size, int max)
 +{
 +	int	p;
@@ -912,7 +516,7 @@ index 0000000..7534cc2
 +static unsigned R_UploadTexture (const byte *pixels, int stride, int width, int height,
 +	int w, int h, int *mem, qboolean transparent)
 +{
-+	int			x, y, offset;
++	int			x, y, offset, u, ustep;
 +	const byte	*row;
 +	byte		p[2];
 +	u16			*dst;
@@ -920,15 +524,17 @@ index 0000000..7534cc2
 +	offset = *mem;
 +	*mem += w * h;
 +
++	// in 16.16 fixed point, the ARM9 would divide for every pixel
++	ustep = (width << 16) / w;
 +	R_MapTextures (true);
 +	dst = R_TexVRAM (offset);
 +	for (y = 0; y < h; y++)
 +	{
 +		row = pixels + (y * height / h) * stride;
-+		for (x = 0; x < w; x += 2)
++		for (x = 0, u = 0; x < w; x += 2, u += 2 * ustep)
 +		{
-+			p[0] = row[x * width / w];
-+			p[1] = row[(x + 1) * width / w];
++			p[0] = row[u >> 16];
++			p[1] = row[(u + ustep) >> 16];
 +			if (transparent)
 +			{
 +				p[0] = p[0] == 255 ? 0 : p[0] ? p[0] : tex_black;
@@ -948,9 +554,9 @@ index 0000000..7534cc2
 +{
 +	int	w = tx->width >> mip, h = tx->height >> mip;
 +
-+	// only the back layer of the sky, the right half, is drawn
++	// the sky has two layers side by side
 +	if (!Q_strncmp (tx->name, "sky", 3))
-+		w >>= 1;
++		return 2 * R_TexSize (w >> 1, MAX_TEXSIZE) * R_TexSize (h, MAX_TEXSIZE);
 +	return R_TexSize (w, MAX_TEXSIZE) * R_TexSize (h, MAX_TEXSIZE);
 +}
 +
@@ -964,23 +570,37 @@ index 0000000..7534cc2
 +*/
 +void R_LoadTextures (texture_t **textures, int numtextures, lump_t *l)
 +{
-+	int			i, mip[MAX_MAP_TEXTURES], total, avail, largest, w, h, gw, gh;
++	int			i, j, mip[MAX_MAP_TEXTURES], total, avail, largest, w, h, gw, gh;
 +	byte		*pixels;
-+	texture_t	*tx;
++	texture_t	*tx, *shared[MAX_MAP_TEXTURES];
++	qboolean	instance;
 +
 +	if (numtextures > MAX_MAP_TEXTURES)
 +		Sys_Error ("R_LoadTextures: too many textures");
 +
 +	// the world leaves some room for the brush models loaded after it
++	instance = tex_world != TEXMEM_NOTEXTURE;
 +	avail = TEXMEM_MODELS - tex_world;
-+	if (tex_world == TEXMEM_NOTEXTURE)
++	if (!instance)
++	{
 +		avail -= TEXMEM_INSTANCES;
++		num_shared_textures = 0;
++	}
 +
 +	total = 0;
 +	for (i = 0; i < numtextures; i++)
 +	{
 +		mip[i] = 0;
-+		if (textures[i])
++		shared[i] = NULL;
++		if (!textures[i])
++			continue;
++		if (instance)
++			for (j = 0; j < num_shared_textures; j++)
++				if (!strcmp (shared_textures[j]->name, textures[i]->name)
++					&& shared_textures[j]->width == textures[i]->width
++					&& shared_textures[j]->height == textures[i]->height)
++					shared[i] = shared_textures[j];
++		if (!shared[i])
 +			total += R_BrushTexSize (textures[i], 0);
 +	}
 +
@@ -989,7 +609,7 @@ index 0000000..7534cc2
 +	{
 +		largest = -1;
 +		for (i = 0; i < numtextures; i++)
-+			if (textures[i] && mip[i] < MIPLEVELS - 1 && (largest < 0 ||
++			if (textures[i] && !shared[i] && mip[i] < MIPLEVELS - 1 && (largest < 0 ||
 +				R_BrushTexSize (textures[i], mip[i]) > R_BrushTexSize (textures[largest], mip[largest])))
 +				largest = i;
 +		if (largest < 0)
@@ -1004,6 +624,12 @@ index 0000000..7534cc2
 +		tx = textures[i];
 +		if (!tx)
 +			continue;
++		if (shared[i])
++		{
++			memcpy (tx->gxparam, shared[i]->gxparam, sizeof(tx->gxparam));
++			memcpy (tx->gxscale, shared[i]->gxscale, sizeof(tx->gxscale));
++			continue;
++		}
 +
 +		w = tx->width >> mip[i];
 +		h = tx->height >> mip[i];
@@ -1023,20 +649,24 @@ index 0000000..7534cc2
 +
 +		if (!Q_strncmp (tx->name, "sky", 3))
 +		{
++			// the solid back layer on the right, the front on the left
++			// with index 0 transparent, their coordinates are in 1/16 texels
 +			gw = R_TexSize (w / 2, MAX_TEXSIZE);
 +			gh = R_TexSize (h, MAX_TEXSIZE);
 +			tx->gxparam[0] = R_UploadTexture (pixels + w / 2, w, w / 2, h, gw, gh, &tex_world, false);
-+			tx->gxscale[0] = (2 * gw << 12) / (tx->width / 2);
++			tx->gxparam[1] = R_UploadTexture (pixels, w, w / 2, h, gw, gh, &tex_world, false) |
++				GL_TEXTURE_COLOR0_TRANSPARENT;
++			tx->gxscale[0] = (gw << 12) / (tx->width / 2);
++			tx->gxscale[1] = (gh << 12) / tx->height;
++			continue;
 +		}
-+		else
-+		{
-+			gw = R_TexSize (w, MAX_TEXSIZE);
-+			gh = R_TexSize (h, MAX_TEXSIZE);
-+			tx->gxparam[0] = R_UploadTexture (pixels, w, w, h, gw, gh, &tex_world, false);
-+			tx->gxscale[0] = (2 * gw << 12) / tx->width;
-+		}
++		gw = R_TexSize (w, MAX_TEXSIZE);
++		gh = R_TexSize (h, MAX_TEXSIZE);
++		tx->gxparam[0] = tx->gxparam[1] = R_UploadTexture (pixels, w, w, h, gw, gh, &tex_world, false);
++		tx->gxscale[0] = (2 * gw << 12) / tx->width;
 +		tx->gxscale[1] = (2 * gh << 12) / tx->height;
-+		tx->gxparam[1] = tx->gxparam[0];
++		if (instance && num_shared_textures < MAX_SHARED_TEXTURES)
++			shared_textures[num_shared_textures++] = tx;
 +	}
 +	R_MapTextures (false);
 +}
@@ -1147,19 +777,140 @@ index 0000000..7534cc2
 +}
 +
 +// Allocates the hardware data of an alias model and packs its texture coordinates
++// Triangle strips through the triangles of an alias model, like GLQuake's
++// gl_mesh.c without fans, which the hardware doesn't have: a strip takes the
++// triangles that share its last edge, on the same side of the skin seam.
++// The vertices go to the hardware once per strip instead of three times per
++// triangle. Returns the size of the strips, written to out when not NULL.
++#define	MAXSTRIPTRIS	1024
++
++// The triangle edges by their vertices, to find the next triangle of a strip
++// without searching them all
++#define	EDGE_HASH			1024
++#define	EDGE_KEY(a,b)		(((a) * 31 + (b)) & (EDGE_HASH - 1))
++
++// What building the strips works with, for models of up to MAXSTRIPTRIS
++// triangles, Quake's have less than 500
++typedef struct
++{
++	byte	used[MAXSTRIPTRIS];
++	short	edge_first[EDGE_HASH], edge_next[MAXSTRIPTRIS * 3];
++	u16		verts[MAXSTRIPTRIS + 2], striptris[MAXSTRIPTRIS];
++	u16		bestverts[MAXSTRIPTRIS + 2], besttris[MAXSTRIPTRIS];
++} stripwork_t;
++
++static void R_HashEdges (stripwork_t *w, mtriangle_t *tris, int numtris)
++{
++	int	i, k, key;
++
++	memset (w->edge_first, -1, sizeof(w->edge_first));
++	// in reverse, so each chain lists the triangles in order
++	for (i = numtris - 1; i >= 0; i--)
++		for (k = 2; k >= 0; k--)
++		{
++			key = EDGE_KEY (tris[i].vertindex[k], tris[i].vertindex[(k + 1) % 3]);
++			w->edge_next[i * 3 + k] = w->edge_first[key];
++			w->edge_first[key] = i * 3 + k;
++		}
++}
++
++static int R_StripLength (stripwork_t *w, mtriangle_t *tris, int numtris, int start, int startv)
++{
++	byte		*used = w->used;
++	u16			*verts = w->verts, *striptris = w->striptris;
++	mtriangle_t	*last = &tris[start], *check;
++	int			m1, m2, e, j, k, count = 1;
++
++	used[start] = 2;
++	verts[0] = last->vertindex[startv % 3];
++	verts[1] = last->vertindex[(startv + 1) % 3];
++	verts[2] = last->vertindex[(startv + 2) % 3];
++	striptris[0] = start;
++	m1 = last->vertindex[(startv + 2) % 3];
++	m2 = last->vertindex[(startv + 1) % 3];
++next:
++	// the first triangle after the start with the strip's last edge
++	for (e = w->edge_first[EDGE_KEY (m1, m2)]; e >= 0; e = w->edge_next[e])
++	{
++		j = e / 3;
++		k = e % 3;
++		check = &tris[j];
++		if (j <= start || check->facesfront != last->facesfront
++			|| check->vertindex[k] != m1 || check->vertindex[(k + 1) % 3] != m2)
++			continue;
++		if (used[j])
++			goto done;
++		// the new edge alternates sides, like the strip
++		if (count & 1)
++			m2 = check->vertindex[(k + 2) % 3];
++		else
++			m1 = check->vertindex[(k + 2) % 3];
++		verts[count + 2] = check->vertindex[(k + 2) % 3];
++		striptris[count] = j;
++		count++;
++		used[j] = 2;
++		goto next;
++	}
++done:
++	for (j = start; j < numtris; j++)
++		if (used[j] == 2)
++			used[j] = 0;
++	return count;
++}
++
++static int R_BuildStrips (mtriangle_t *tris, int numtris, u16 *out)
++{
++	static stripwork_t	w;
++	int			i, j, startv, len, bestlen, size = 1;
++
++	memset (w.used, 0, numtris);
++	R_HashEdges (&w, tris, numtris);
++	for (i = 0; i < numtris; i++)
++	{
++		if (w.used[i])
++			continue;
++		bestlen = 0;
++		for (startv = 0; startv < 3; startv++)
++		{
++			len = R_StripLength (&w, tris, numtris, i, startv);
++			if (len > bestlen)
++			{
++				bestlen = len;
++				memcpy (w.bestverts, w.verts, (len + 2) * sizeof(w.verts[0]));
++				memcpy (w.besttris, w.striptris, len * sizeof(w.striptris[0]));
++			}
++		}
++		for (j = 0; j < bestlen; j++)
++			w.used[w.besttris[j]] = 1;
++		if (out)
++		{
++			out[size - 1] = bestlen + 2;
++			out[size] = tris[i].facesfront;
++			memcpy (out + size + 1, w.bestverts, (bestlen + 2) * sizeof(w.verts[0]));
++		}
++		size += bestlen + 4;
++	}
++	if (out)
++		out[size - 1] = 0;
++	return size;
++}
++
 +static void R_SetupAliasModel (model_t *mod, int numskins)
 +{
 +	aliashdr_t	*paliashdr;
 +	mdl_t		*pmdl;
 +	stvert_t	*stverts;
 +	gxalias_t	*gx;
-+	int			i, s, t;
++	int			i, s, t, strips;
 +
 +	paliashdr = Mod_Extradata (mod);
 +	pmdl = (mdl_t *)((byte *)paliashdr + paliashdr->model);
++	strips = pmdl->numtris <= MAXSTRIPTRIS ?
++		R_BuildStrips ((mtriangle_t *)((byte *)paliashdr + paliashdr->triangles), pmdl->numtris, NULL) : 0;
 +	gx = Hunk_AllocName (sizeof(gxalias_t) + numskins * sizeof(gx->skins[0]) +
-+		pmdl->numverts * 2 * sizeof(unsigned), "gxalias");
++		pmdl->numverts * 2 * sizeof(unsigned) + strips * sizeof(u16), "gxalias");
 +	gx->st = (unsigned *)&gx->skins[numskins];
++	gx->strips = strips ? (u16 *)(gx->st + pmdl->numverts * 2) : NULL;
 +	mod->gxalias = gx;
 +
 +	// the hunk allocation may have evicted the model, the texture
@@ -1176,6 +927,111 @@ index 0000000..7534cc2
 +			s += pmdl->skinwidth << 3;
 +		gx->st[pmdl->numverts + i] = TEXTURE_PACK (s, t);
 +	}
++	if (gx->strips)
++		R_BuildStrips ((mtriangle_t *)((byte *)paliashdr + paliashdr->triangles), pmdl->numtris, gx->strips);
++}
++
++/*
++================
++R_SkinCoverage
++
++Marks the texels of a skin the triangles of its model cover, their middles
++inside a triangle. The texels around them aren't painted or have the
++background, like the blue around the shotguns.
++================
++*/
++__attribute__((target("arm")))
++static void R_SkinCoverage (model_t *mod, byte *mask, int w, int h)
++{
++	aliashdr_t	*paliashdr = Cache_Check (&mod->cache);
++	mdl_t		*pmdl;
++	stvert_t	*stverts;
++	mtriangle_t	*tri;
++	int			i, j, k, x, y, x0, x1, s[3], t[3], miny, maxy;
++
++	memset (mask, 1, w * h);	// all of it when the model is gone
++	if (!paliashdr)
++		return;
++	pmdl = (mdl_t *)((byte *)paliashdr + paliashdr->model);
++	stverts = (stvert_t *)((byte *)paliashdr + paliashdr->stverts);
++	tri = (mtriangle_t *)((byte *)paliashdr + paliashdr->triangles);
++
++	// the spans between the edges at the middles of the rows, in half texels
++	memset (mask, 0, w * h);
++	for (i = 0; i < pmdl->numtris; i++, tri++)
++	{
++		for (j = 0; j < 3; j++)
++		{
++			k = tri->vertindex[j];
++			s[j] = 2 * ((stverts[k].s >> 16) + (!tri->facesfront && stverts[k].onseam ? w / 2 : 0));
++			t[j] = 2 * (stverts[k].t >> 16);
++		}
++		miny = MAX (MIN (t[0], MIN (t[1], t[2])) / 2, 0);
++		maxy = MIN (MAX (t[0], MAX (t[1], t[2])) / 2, h - 1);
++		for (y = miny; y <= maxy; y++)
++		{
++			x0 = 0x7fffffff;
++			x1 = -1;
++			for (j = 0; j < 3; j++)
++			{
++				k = j == 2 ? 0 : j + 1;
++				if (t[j] == t[k] || 2 * y + 1 < MIN (t[j], t[k]) || 2 * y + 1 > MAX (t[j], t[k]))
++					continue;
++				x = s[j] + (s[k] - s[j]) * (2 * y + 1 - t[j]) / (t[k] - t[j]);
++				x0 = MIN (x0, x);
++				x1 = MAX (x1, x);
++			}
++			// the texels with their middle, 2 * x + 1, in the span
++			x0 = MAX (x0 / 2, 0);
++			x1 = MIN ((x1 - 1) / 2, w - 1);
++			if (x0 <= x1)
++				memset (mask + y * w + x0, 1, x1 - x0 + 1);
++		}
++	}
++}
++
++/*
++================
++R_FillSkin
++
++Every texel of a skin, resampled to the size of its hardware texture, that
++isn't covered takes the color of a covered one along its row, then along
++its column for the rows without any, from both ends: the edges of the
++triangles sample next to what's painted, triangles thinner than a texel
++cover none.
++================
++*/
++__attribute__((target("arm")))
++static void R_FillSkin (byte *pixels, byte *mask, int w, int h)
++{
++	int		i, j, k, last, step, len, pass;
++	byte	*p, *m;
++
++	for (pass = 0; pass < 2; pass++)
++		for (i = 0; i < (pass ? w : h); i++)
++			for (step = -1; step <= 1; step += 2)
++			{
++				len = pass ? h : w;
++				p = pass ? pixels + i : pixels + i * w;
++				m = pass ? mask + i : mask + i * w;
++				k = pass ? w : 1;
++				if (step < 0)
++				{
++					p += (len - 1) * k;
++					m += (len - 1) * k;
++					k = -k;
++				}
++				for (j = 0, last = -1; j < len; j++, p += k, m += k)
++				{
++					if (*m && *m <= pass + 1)
++						last = j;
++					else if (!*m && last >= 0)
++					{
++						*p = p[-k * (j - last)];
++						*m = pass + 2;
++					}
++				}
++			}
 +}
 +
 +static int R_ModelTexSize (modeltex_t *t)
@@ -1193,12 +1049,12 @@ index 0000000..7534cc2
 +*/
 +static void R_UploadModelTextures (void)
 +{
-+	int			i, j, total, w, h, gw, gh, filebase = 0;
++	int			i, j, k, x, y, u, ustep, total, w, h, gw, gh, filebase = 0;
 +	model_t		*mod, *filemod = NULL;
 +	modeltex_t	*t, *largest;
 +	gxalias_t	*skins;
 +	gxtex_t		*tex;
-+	byte		*pixels;
++	byte		*pixels, *skin = NULL, *mask;
 +	FILE		*f = NULL;
 +
 +	nummodeltex = 0;
@@ -1207,7 +1063,14 @@ index 0000000..7534cc2
 +		mod = cl.model_precache[i];
 +		mod->gxalias = NULL;
 +		if (mod->type == mod_alias)
++		{
++			// the hardware data too while the model is in the cache, a
++			// level's models don't all fit in it while it loads
++			j = nummodeltex;
 +			R_ForEachSkin (Mod_Extradata (mod), R_AddSkin, mod);
++			if (nummodeltex > j)
++				R_SetupAliasModel (mod, nummodeltex - j);
++		}
 +		else if (mod->type == mod_sprite)
 +			R_AddSprite (mod);
 +	}
@@ -1225,16 +1088,6 @@ index 0000000..7534cc2
 +		if (total <= TEXMEM_END - TEXMEM_MODELS || !largest)
 +			break;
 +		largest->maxsize >>= 1;
-+	}
-+
-+	// the hardware data of each alias model, the skins of a model were
-+	// added in a row
-+	for (i = 0; i < nummodeltex; i = j)
-+	{
-+		for (j = i + 1; j < nummodeltex && modeltex[j].model == modeltex[i].model; j++)
-+			;
-+		if (modeltex[i].skin >= 0)
-+			R_SetupAliasModel (modeltex[i].model, j - i);
 +	}
 +
 +	tex_models = TEXMEM_MODELS;
@@ -1256,11 +1109,30 @@ index 0000000..7534cc2
 +					Sys_Error ("R_UploadModelTextures: can't open %s", filemod->name);
 +				filebase = ftell (f);
 +			}
-+			pixels = Hunk_TempAlloc (t->width * t->height);
++			// the skin and the texels its triangles cover, resampled to the
++			// texture size together and filled in there. The coverage needs
++			// the model in the cache, loaded before the temporary memory,
++			// which loading would free.
++			Mod_Extradata (t->model);
++			pixels = Hunk_TempAlloc ((t->width * t->height + gw * gh) * 2);
 +			if (!pixels)
 +				Sys_Error ("R_UploadModelTextures: not enough memory");
 +			fseek (f, filebase + t->skin, SEEK_SET);
 +			fread (pixels, 1, t->width * t->height, f);
++			mask = pixels + t->width * t->height;
++			skin = mask + t->width * t->height;
++			R_SkinCoverage (t->model, mask, t->width, t->height);
++			ustep = (t->width << 16) / gw;	// 16.16 fixed point, the middles of the texels
++			for (y = 0; y < gh; y++)
++			{
++				k = ((2 * y + 1) * t->height / (2 * gh)) * t->width;
++				for (x = 0, u = ustep / 2; x < gw; x++, u += ustep)
++				{
++					skin[y * gw + x] = pixels[k + (u >> 16)];
++					skin[gw * gh + y * gw + x] = mask[k + (u >> 16)];
++				}
++			}
++			R_FillSkin (skin, skin + gw * gh, gw, gh);
 +
 +			skins = t->model->gxalias;
 +			skins->skins[skins->numskins].offset = t->skin;
@@ -1272,7 +1144,10 @@ index 0000000..7534cc2
 +			t->frame->pcachespot = tex;
 +			pixels = t->frame->pixels;
 +		}
-+		tex->param = R_UploadTexture (pixels, t->width, t->width, t->height, gw, gh, &tex_models, t->skin < 0);
++		if (t->skin >= 0)
++			tex->param = R_UploadTexture (skin, gw, gw, gh, gw, gh, &tex_models, false);
++		else
++			tex->param = R_UploadTexture (pixels, t->width, t->width, t->height, gw, gh, &tex_models, true);
 +		tex->scale[0] = (gw << 12) / t->width;
 +		tex->scale[1] = (gh << 12) / t->height;
 +	}
@@ -1311,11 +1186,207 @@ index 0000000..7534cc2
 +}
 +
 +// gxsurf_t, texture coordinates, vertex indices and light, word aligned
-+static int R_SurfaceSize (msurface_t *surf)
++static int R_SurfaceSize (msurface_t *surf, int n)
 +{
-+	int	n = MIN (surf->numedges, MAX_SURFVERTS);
-+
 +	return (sizeof(gxsurf_t) + n * 4 + ((n * 2 + 3) & ~3) + R_SurfaceStyles (surf) * n + 3) & ~3;
++}
++
++#define	TJ_CELL			9		// 64 units in 1/8 units
++#define	TJ_CELLOF(x)	(((x) + 256) >> TJ_CELL)	// half a cell off the walls on the 64 unit grid
++#define	TJ_HASH			4096
++#define	TJ_MAXINSERT	32		// vertices added to an edge
++
++static int R_TJHash (int cx, int cy, int cz)
++{
++	return (cx * 73856093 ^ cy * 19349663 ^ cz * 83492791) & (TJ_HASH - 1);
++}
++
++/*
++================
++R_EdgeTJunctions
++
++A vertex of one face in the middle of an edge of another is a T-junction,
++the hardware leaves a crack along that edge. The vertices on each edge, at
++most 1/8 unit off it, are found through a hash of the vertex positions by
++64 unit cells. Returns them for R_SurfaceVerts, at offset ecache[edge] the
++number of them, then the vertices from v[0] to v[1]. In high hunk memory,
++freed with the rest of the geometry.
++================
++*/
++#define	TJ_END		0xffff
++
++// ARM code, the loading time is mostly spent here
++__attribute__((target("arm")))
++static unsigned short *R_EdgeTJunctions (model_t *mod, unsigned short **ecache)
++{
++	unsigned short	*head, *next, *elist, *ec;
++	int				i, k, a, b, v, n, total, max, x[3], lo[3], hi[3], c[3], ins[TJ_MAXINSERT];
++	int				d[3], w[3], dot, len2, len, cr, sh, at[TJ_MAXINSERT];
++
++	// positions from the hardware vertices
++#define	TJ_POS(v, k)	((k) == 2 ? (short) (mod->gxvertexes[(v) * 2 + 1] & 0xffff) : \
++						 (short) (mod->gxvertexes[(v) * 2] >> ((k) * 16)))
++
++	head = Hunk_HighAllocName (TJ_HASH * sizeof(*head), "tjhash");
++	next = Hunk_HighAllocName (mod->numvertexes * sizeof(*next), "tjnext");
++	for (i = 0; i < TJ_HASH; i++)
++		head[i] = TJ_END;
++	for (i = 0; i < mod->numvertexes; i++)
++	{
++		k = R_TJHash (TJ_CELLOF (TJ_POS (i, 0)), TJ_CELLOF (TJ_POS (i, 1)), TJ_CELLOF (TJ_POS (i, 2)));
++		next[i] = head[k];
++		head[k] = i;
++	}
++
++	ec = *ecache = Hunk_HighAllocName (mod->numedges * sizeof(*ec), "tjedges");
++	max = MIN (mod->numedges * 2, TJ_END);
++	elist = Hunk_HighAllocName (max * sizeof(*elist), "tjins");
++	total = 0;
++	for (i = 0; i < mod->numedges; i++)
++	{
++		if (total >= max)
++		{
++			ec[i] = TJ_END;
++			continue;
++		}
++		a = mod->edges[i].v[0];
++		b = mod->edges[i].v[1];
++		for (k = 0; k < 3; k++)
++		{
++			x[k] = TJ_POS (a, k);
++			lo[k] = MIN (x[k], TJ_POS (b, k)) - 1;
++			hi[k] = MAX (x[k], TJ_POS (b, k)) + 1;
++			d[k] = TJ_POS (b, k) - x[k];
++		}
++		// in 32 bits, longer edges than 2048 units are worked out in
++		// coarser steps
++		n = 0;
++		for (sh = 0; MAX (abs (d[0]), MAX (abs (d[1]), abs (d[2]))) >> sh >= 16384; sh++)
++			;
++		for (k = 0; k < 3; k++)
++			d[k] >>= sh;
++		len2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
++		len = sqrt32 (len2);
++		for (c[2] = TJ_CELLOF (lo[2]); c[2] <= TJ_CELLOF (hi[2]); c[2]++)
++			for (c[1] = TJ_CELLOF (lo[1]); c[1] <= TJ_CELLOF (hi[1]); c[1]++)
++				for (c[0] = TJ_CELLOF (lo[0]); c[0] <= TJ_CELLOF (hi[0]); c[0]++)
++					for (v = head[R_TJHash (c[0], c[1], c[2])]; v != TJ_END; v = next[v])
++					{
++						if (v == a || v == b)
++							continue;
++						for (k = 0; k < 3; k++)
++						{
++							w[k] = TJ_POS (v, k);
++							if (w[k] < lo[k] || w[k] > hi[k] || TJ_CELLOF (w[k]) != c[k])
++								break;
++							w[k] = (w[k] - x[k]) >> sh;
++						}
++						if (k < 3)
++							continue;
++						dot = d[0] * w[0] + d[1] * w[1] + d[2] * w[2];
++						if (dot <= 0 || dot >= len2)
++							continue;
++						// the distance to the edge is |d x w| / |d|
++						cr = abs (d[1] * w[2] - d[2] * w[1]) + abs (d[2] * w[0] - d[0] * w[2])
++							+ abs (d[0] * w[1] - d[1] * w[0]);
++						if (cr > len + len)
++							continue;
++						for (k = 0; k < n && at[k] != dot; k++)
++							;
++						if (k < n)
++							continue;	// a vertex at the same place
++						for (k = n; k > 0 && at[k - 1] > dot; k--)
++							if (k < TJ_MAXINSERT)
++							{
++								ins[k] = ins[k - 1];
++								at[k] = at[k - 1];
++							}
++						if (k < TJ_MAXINSERT)
++						{
++							ins[k] = v;
++							at[k] = dot;
++							n = MIN (n + 1, TJ_MAXINSERT);
++						}
++					}
++		n = MIN (n, max - total - 1);
++		ec[i] = total;
++		elist[total++] = n;
++		for (k = 0; k < n; k++)
++			elist[total++] = ins[k];
++	}
++#undef	TJ_POS
++	return elist;
++}
++
++// The vertices of a surface with those of its T-junctions, into out unless
++// it's NULL, returns how many
++static int R_SurfaceVerts (model_t *mod, msurface_t *surf, unsigned short *elist, unsigned short *ecache,
++	unsigned short *out)
++{
++	int				j, k, e, n = 0, num;
++	unsigned short	*ins;
++
++	for (j = 0; j < surf->numedges && n < MAX_SURFVERTS; j++)
++	{
++		e = mod->surfedges[surf->firstedge + j];
++		if (out)
++			out[n] = e >= 0 ? mod->edges[e].v[0] : mod->edges[-e].v[1];
++		n++;
++		if (ecache[abs (e)] == TJ_END)
++			continue;
++		ins = elist + ecache[abs (e)];
++		num = *ins++;
++		// backwards on a face that has the edge the other way around
++		for (k = 0; k < num && n < MAX_SURFVERTS; k++, n++)
++			if (out)
++				out[n] = ins[e >= 0 ? k : num - 1 - k];
++	}
++	return n;
++}
++
++/*
++================
++R_StripStart
++
++The 3D hardware tells the side a polygon faces from its first three
++vertices, i, j and j' of each quad of R_EmitSurface's strip. In a line it
++can get that wrong, then it leaves the edges that run more across than down
++unfilled. Returns the first vertex to start the strip at that keeps them a
++unit from a line, a T-junction is in a line with its edge. The vertices are
++there twice, one after the other.
++================
++*/
++__attribute__((target("arm")))
++static int R_StripStart (model_t *mod, msurface_t *surf, unsigned short *verts, int n)
++{
++	int			r, k, j, a0, a1, d[3][2];
++	long long	c;
++	unsigned	*pos;
++
++	// in the plane seen along the axis it's most across, in the 1/8 units of
++	// the vertices: the cross product over the larger side of j to j' is 8
++	// times the distance of i from their line
++	a0 = (surf->plane->type + 1) % 3;
++	a1 = (surf->plane->type + 2) % 3;
++	for (r = 0; r < n; r++)
++	{
++		for (k = 0; k < (n - 1) / 2; k++)
++		{
++			for (j = 0; j < 3; j++)
++			{
++				pos = mod->gxvertexes + verts[j ? r + n - k - j + 1 : r + k + 1] * 2;
++				d[j][0] = a0 == 2 ? (short) pos[1] : (short) (pos[0] >> (a0 * 16));
++				d[j][1] = a1 == 2 ? (short) pos[1] : (short) (pos[0] >> (a1 * 16));
++			}
++			c = (long long) (d[0][0] - d[1][0]) * (d[2][1] - d[1][1]) -
++				(long long) (d[0][1] - d[1][1]) * (d[2][0] - d[1][0]);
++			if ((c < 0 ? -c : c) < MAX (abs (d[2][0] - d[1][0]), abs (d[2][1] - d[1][1])) * VERTEX_SCALE)
++				break;
++		}
++		if (k == (n - 1) / 2)
++			return r;
++	}
++	return 0;
 +}
 +
 +/*
@@ -1328,7 +1399,8 @@ index 0000000..7534cc2
 +*/
 +void R_BuildSurfaces (model_t *mod)
 +{
-+	int			i, j, k, e, n, x, y, z, numstyles, smax, tmax, ls, lt, size;
++	int			i, j, k, n, x, y, z, numstyles, smax, tmax, ls, lt, size;
++	unsigned short	*elist, *ecache;
 +	byte		*data;
 +	msurface_t	*surf;
 +	mvertex_t	*v;
@@ -1336,6 +1408,8 @@ index 0000000..7534cc2
 +	gxsurf_t	*gx;
 +	float		st[MAX_SURFVERTS][2], mins[2], base[2];
 +	unsigned	*out;
++	unsigned short	*verts, start[MAX_SURFVERTS * 2];
++	byte		*light;
 +
 +	for (i = 0; i < mod->numplanes; i++)
 +	{
@@ -1354,32 +1428,35 @@ index 0000000..7534cc2
 +		*out++ = z & 0xffff;
 +	}
 +
++	elist = R_EdgeTJunctions (mod, &ecache);
++
 +	// all surfaces in one allocation, the hunk rounds each up to 16 bytes
 +	size = 0;
 +	for (i = 0, surf = mod->surfaces; i < mod->numsurfaces; i++, surf++)
-+		size += R_SurfaceSize (surf);
++		size += R_SurfaceSize (surf, R_SurfaceVerts (mod, surf, elist, ecache, NULL));
 +	data = Hunk_AllocName (size, "gxsurf");
 +
 +	for (i = 0, surf = mod->surfaces; i < mod->numsurfaces; i++, surf++)
 +	{
-+		n = MIN (surf->numedges, MAX_SURFVERTS);
++		n = R_SurfaceVerts (mod, surf, elist, ecache, NULL);
 +		tex = surf->texinfo;
 +		numstyles = R_SurfaceStyles (surf);
 +
 +		gx = surf->gx = (gxsurf_t *)data;
-+		data += R_SurfaceSize (surf);
++		data += R_SurfaceSize (surf, n);
 +		gx->numverts = n;
 +		gx->numstyles = numstyles;
-+		gx->st = (unsigned *)(gx + 1);
-+		gx->verts = (unsigned short *)(gx->st + n);
-+		gx->light = (byte *)gx->verts + ((n * 2 + 3) & ~3);
++		verts = GX_VERTS (gx);
++		light = GX_LIGHT (gx);
 +
 +		mins[0] = mins[1] = 999999;
++		R_SurfaceVerts (mod, surf, elist, ecache, start);
++		memcpy (start + n, start, n * sizeof(*start));
++		k = R_StripStart (mod, surf, start, n);
++		memcpy (verts, start + k, n * sizeof(*verts));
 +		for (j = 0; j < n; j++)
 +		{
-+			e = mod->surfedges[surf->firstedge + j];
-+			gx->verts[j] = e >= 0 ? mod->edges[e].v[0] : mod->edges[-e].v[1];
-+			v = &mod->vertexes[gx->verts[j]];
++			v = &mod->vertexes[verts[j]];
 +			for (k = 0; k < 2; k++)
 +			{
 +				st[j][k] = DotProduct (v->position, tex->vecs[k]) + tex->vecs[k][3];
@@ -1389,8 +1466,8 @@ index 0000000..7534cc2
 +		}
 +
 +		// start near 0, the hardware only takes 12 bits of texels
-+		base[0] = floor (mins[0] / tex->texture->width) * tex->texture->width;
-+		base[1] = floor (mins[1] / tex->texture->height) * tex->texture->height;
++		base[0] = floorf (mins[0] / tex->texture->width) * tex->texture->width;
++		base[1] = floorf (mins[1] / tex->texture->height) * tex->texture->height;
 +
 +		smax = (surf->extents[0] >> 4) + 1;
 +		tmax = (surf->extents[1] >> 4) + 1;
@@ -1400,10 +1477,10 @@ index 0000000..7534cc2
 +			y = CLAMP (-32768, (int) ((st[j][1] - base[1]) * ST_SCALE), 32767);
 +			gx->st[j] = TEXTURE_PACK (x, y);
 +
-+			ls = CLAMP (0, (int) ((st[j][0] - surf->texturemins[0]) / 16 + 0.5), smax - 1);
-+			lt = CLAMP (0, (int) ((st[j][1] - surf->texturemins[1]) / 16 + 0.5), tmax - 1);
++			ls = CLAMP (0, (int) ((st[j][0] - surf->texturemins[0]) * (1.0f / 16) + 0.5f), smax - 1);
++			lt = CLAMP (0, (int) ((st[j][1] - surf->texturemins[1]) * (1.0f / 16) + 0.5f), tmax - 1);
 +			for (k = 0; k < numstyles; k++)
-+				gx->light[k * n + j] = surf->samples[k * smax * tmax + lt * smax + ls];
++				light[k * n + j] = surf->samples[k * smax * tmax + lt * smax + ls];
 +		}
 +	}
 +}
@@ -1430,7 +1507,7 @@ index 0000000..7534cc2
 +
 +	for (i = 0; i < gx->numverts; i++)
 +	{
-+		pos = cl.worldmodel->gxvertexes + gx->verts[i] * 2;
++		pos = cl.worldmodel->gxvertexes + GX_VERTS (gx)[i] * 2;
 +		v[0] = (short) (pos[0] & 0xffff) * (1.0f / VERTEX_SCALE);
 +		v[1] = (short) (pos[0] >> 16) * (1.0f / VERTEX_SCALE);
 +		v[2] = (short) (pos[1] & 0xffff) * (1.0f / VERTEX_SCALE);
@@ -1445,7 +1522,7 @@ index 0000000..7534cc2
 +	}
 +
 +	for (k = 0; k < gx->numstyles; k++)
-+		l += gx->light[k * gx->numverts + nearest] * d_lightstylevalue[surf->styles[k]];
++		l += GX_LIGHT (gx)[k * gx->numverts + nearest] * d_lightstylevalue[surf->styles[k]];
 +	return l >> 8;
 +}
 +
@@ -1485,10 +1562,57 @@ index 0000000..7534cc2
 +	return base;
 +}
 +
-+static void R_DrawGXSurface (model_t *mod, msurface_t *surf)
++HOT_CODE static int R_Sqrt (int n)
++{
++	int	root = 0, bit = 1 << 30;
++
++	while (bit > n)
++		bit >>= 2;
++	for (; bit; bit >>= 2)
++	{
++		if (n >= root + bit)
++		{
++			n -= root + bit;
++			root = (root >> 1) + bit;
++		}
++		else
++			root >>= 1;
++	}
++	return root;
++}
++
++// Adds the dynamic lights that touch a surface to its vertex light
++HOT_CODE static void R_AddDynamicLights (model_t *mod, msurface_t *surf, int *vlight)
 +{
 +	gxsurf_t	*gx = surf->gx;
-+	int			n = gx->numverts, i, j, k, l, sv[MAXLIGHTMAPS];
++	unsigned short	*verts = GX_VERTS (gx);
++	unsigned	*pos;
++	int			i, k, x, y, z, d, *dl;
++
++	for (k = 0; k < MAX_DLIGHTS; k++)
++	{
++		if (!(surf->dlightbits & (1 << k)))
++			continue;
++		dl = r_dlight_i[k];
++		for (i = 0; i < gx->numverts; i++)
++		{
++			pos = mod->gxvertexes + verts[i] * 2;
++			x = ((short) (pos[0] & 0xffff) >> 3) - dl[0];
++			y = ((short) (pos[0] >> 16) >> 3) - dl[1];
++			z = ((short) (pos[1] & 0xffff) >> 3) - dl[2];
++			d = x * x + y * y + z * z;
++			if (d < dl[3] * dl[3])
++				vlight[i] += dl[3] - R_Sqrt (d);
++		}
++	}
++}
++
++static void R_EmitSurface (model_t *mod, gxsurf_t *gx, u16 *color, unsigned *st);
++
++HOT_CODE static void R_DrawGXSurface (model_t *mod, msurface_t *surf)
++{
++	gxsurf_t	*gx = surf->gx;
++	int			n = gx->numverts, i, j, k, l, sv[MAXLIGHTMAPS], vlight[MAX_SURFVERTS];
 +	u16			color[MAX_SURFVERTS];
 +	byte		*light;
 +
@@ -1504,20 +1628,33 @@ index 0000000..7534cc2
 +		for (i = 0; i < n; i++)
 +		{
 +			l = 0;
-+			for (k = 0, light = gx->light + i; k < gx->numstyles; k++, light += n)
++			for (k = 0, light = GX_LIGHT (gx) + i; k < gx->numstyles; k++, light += n)
 +				l += *light * sv[k];
-+			color[i] = gx_light[MIN (l >> 8, 511)];
++			vlight[i] = l >> 8;
 +		}
++		// the world's surfaces are marked by R_PushDlights
++		if (surf->dlightframe == r_framecount && mod == cl.worldmodel)
++			R_AddDynamicLights (mod, surf, vlight);
++		for (i = 0; i < n; i++)
++			color[i] = gx_light[MIN (vlight[i], 511)];
 +	}
++
++	R_EmitSurface (mod, gx, color, gx->st);
++}
++
++// The polygon of a surface as a quad strip zig-zagging across it: 1 0, 2 n-1,
++// 3 n-2, ... with an odd number of vertices the last quad is a triangle
++HOT_CODE static void R_EmitSurface (model_t *mod, gxsurf_t *gx, u16 *color, unsigned *st)
++{
++	int				i, j, n = gx->numverts;
++	unsigned short	*verts = GX_VERTS (gx);
 +
 +#define EMIT(v) \
 +	GFX_COLOR = color[v]; \
-+	GFX_TEX_COORD = gx->st[v]; \
-+	GFX_VERTEX16 = mod->gxvertexes[gx->verts[v] * 2]; \
-+	GFX_VERTEX16 = mod->gxvertexes[gx->verts[v] * 2 + 1];
++	GFX_TEX_COORD = st[v]; \
++	GFX_VERTEX16 = mod->gxvertexes[verts[v] * 2]; \
++	GFX_VERTEX16 = mod->gxvertexes[verts[v] * 2 + 1];
 +
-+	// a quad strip zig-zagging across the polygon: 1 0, 2 n-1, 3 n-2, ...
-+	// with an odd number of vertices the last quad is a triangle
 +	GFX_BEGIN = GL_QUAD_STRIP;
 +	for (i = 1, j = 0; ; )
 +	{
@@ -1539,15 +1676,67 @@ index 0000000..7534cc2
 +	c_brush_polys += (n - 1) / 2;
 +}
 +
++/*
++================
++R_DrawSkySurfaces
++
++The two sky layers like GLQuake: the texture coordinates follow the
++direction from the eye to each vertex on a flattened sphere, the front
++layer is drawn on the back one with the depth test for equal
++================
++*/
++static void R_DrawSkySurfaces (model_t *mod, texture_t *t)
++{
++	msurface_t	*surf;
++	gxsurf_t	*gx;
++	unsigned	*pos, st[2][MAX_SURFVERTS];
++	u16			color[MAX_SURFVERTS];
++	int			i, x, y, z, len, layer, speed[2];
++
++	for (layer = 0; layer < 2; layer++)
++	{
++		speed[layer] = (int) (realtime * (layer ? 16 : 8)) & 127;
++		speed[layer] <<= 4;
++	}
++	for (i = 0; i < MAX_SURFVERTS; i++)
++		color[i] = GRAY (GX_NORMAL_LIGHT);
++
++	for (surf = t->texturechain; surf; surf = surf->texturechain)
++	{
++		gx = surf->gx;
++		for (i = 0; i < gx->numverts; i++)
++		{
++			pos = mod->gxvertexes + GX_VERTS (gx)[i] * 2;
++			x = ((short) (pos[0] & 0xffff) - modelorg_i[0]) >> 3;
++			y = ((short) (pos[0] >> 16) - modelorg_i[1]) >> 3;
++			z = (((short) (pos[1] & 0xffff) - modelorg_i[2]) >> 3) * 3;
++			// 6*63 texels out on the sphere, in 1/16 texels, with one division
++			len = sqrt32 (x * x + y * y + z * z);
++			len = (6 * 63 * 16 << 12) / (len ? len : 1);
++			x = (x * len) >> 12;
++			y = (y * len) >> 12;
++			st[0][i] = TEXTURE_PACK (speed[0] + x, speed[0] + y);
++			st[1][i] = TEXTURE_PACK (speed[1] + x, speed[1] + y);
++		}
++		for (layer = 0; layer < 2; layer++)
++		{
++			R_BindTexture (t->gxparam[layer], t->gxscale);
++			GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE | (layer ? POLY_DEPTH_EQUAL : 0);
++			R_EmitSurface (mod, gx, color, st[layer]);
++		}
++	}
++	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_NONE;
++}
++
 +static void R_BindBrushTexture (texture_t *t, msurface_t *surf)
 +{
 +	R_BindTexture (t->gxparam[0], t->gxscale);
-+	if (surf->flags & (SURF_DRAWSKY | SURF_DRAWTURB))
++	if (surf->flags & SURF_DRAWTURB)
 +	{
-+		// sky and liquids flow slowly
++		// liquids flow slowly
 +		MATRIX_CONTROL = GL_TEXTURE;
-+		MATRIX_TRANSLATE = F32 (cl.time * (surf->flags & SURF_DRAWSKY ? 8 : 2) * 16);
-+		MATRIX_TRANSLATE = F32 (cl.time * (surf->flags & SURF_DRAWSKY ? 8 : 1) * 16);
++		MATRIX_TRANSLATE = F32 (cl.time * 2 * 16);
++		MATRIX_TRANSLATE = F32 (cl.time * 16);
 +		MATRIX_TRANSLATE = 0;
 +		MATRIX_CONTROL = GL_MODELVIEW;
 +	}
@@ -1561,9 +1750,9 @@ index 0000000..7534cc2
 +		for (j = 0; j < 3; j++)
 +		{
 +			if (multiply)
-+				MATRIX_MULT4x3 = F32 (m[i][j]);
++				MATRIX_MULT4x3 = i < 3 ? F32 (m[i][j]) : R_RoundF32 (m[i][j]);
 +			else
-+				MATRIX_LOAD4x3 = F32 (m[i][j]);
++				MATRIX_LOAD4x3 = i < 3 ? F32 (m[i][j]) : R_RoundF32 (m[i][j]);
 +		}
 +}
 +
@@ -1601,7 +1790,7 @@ index 0000000..7534cc2
 +	float		dot, m[4][3];
 +	model_t		*clmodel = e->model;
 +	qboolean	rotated;
-+	texture_t	*t;
++	texture_t	*t, *bound;
 +
 +	rotated = e->angles[0] || e->angles[1] || e->angles[2];
 +	if (rotated)
@@ -1635,14 +1824,16 @@ index 0000000..7534cc2
 +	R_LoadMatrix (m, true);
 +
 +	psurf = &clmodel->surfaces[clmodel->firstmodelsurface];
-+	for (i=0 ; i<clmodel->nummodelsurfaces ; i++, psurf++)
++	for (i=0, bound=NULL ; i<clmodel->nummodelsurfaces ; i++, psurf++)
 +	{
 +		dot = DotProduct (modelorg, psurf->plane->normal) - psurf->plane->dist;
-+		if (((psurf->flags & SURF_PLANEBACK) && (dot < -BACKFACE_EPSILON)) ||
-+			(!(psurf->flags & SURF_PLANEBACK) && (dot > BACKFACE_EPSILON)))
++		if ((psurf->flags & SURF_PLANEBACK) ? dot < BACKFACE_DIST : dot > -BACKFACE_DIST)
 +		{
++			// the texture only when it changes, liquids move theirs
 +			t = R_TextureAnimation (psurf->texinfo->texture);
-+			R_BindBrushTexture (t, psurf);
++			if (t != bound || (psurf->flags & SURF_DRAWTURB))
++				R_BindBrushTexture (t, psurf);
++			bound = t;
 +			R_DrawGXSurface (clmodel, psurf);
 +		}
 +	}
@@ -1704,7 +1895,7 @@ index 0000000..7534cc2
 +when it's outside.
 +================
 +*/
-+static int R_CullNode (mnode_t *node, int clipflags)
++HOT_CODE static int R_CullNode (mnode_t *node, int clipflags)
 +{
 +	int		i, *f;
 +	short	*mins = node->minmaxs, *maxs = node->minmaxs + 3;
@@ -1725,13 +1916,14 @@ index 0000000..7534cc2
 +	return clipflags;
 +}
 +
-+static void R_RecursiveWorldNode (mnode_t *node, int clipflags)
++HOT_CODE static void R_RecursiveWorldNode (mnode_t *node, int clipflags)
 +{
-+	int			c, side, dot;
++	int			c, dot, front, back;
 +	mplane_t	*plane;
 +	msurface_t	*surf, **mark;
 +	mleaf_t		*pleaf;
 +	texture_t	*t;
++	byte		*seen;
 +
 +	if (node->contents == CONTENTS_SOLID)
 +		return;		// solid
@@ -1765,36 +1957,34 @@ index 0000000..7534cc2
 +		return;
 +	}
 +
-+// node is just a decision point, so go down the apropriate sides
++// node is just a decision point, so go down both sides
++	R_RecursiveWorldNode (node->children[0], clipflags);
++	R_RecursiveWorldNode (node->children[1], clipflags);
 +
-+// find which side of the node we are on
-+	plane = node->plane;
-+	dot = plane->inormal[0] * modelorg_i[0] + plane->inormal[1] * modelorg_i[1] +
-+		plane->inormal[2] * modelorg_i[2] - plane->idist;
-+	side = dot < 0;
-+
-+// recurse down the children, front side first
-+	R_RecursiveWorldNode (node->children[side], clipflags);
-+
-+// add the surfaces facing us to their texture chain
++// add the surfaces facing us to their texture chain, after the leaves below
++// marked them: one in reach of BACKFACE_DIST has them on the other side
 +	c = node->numsurfaces;
 +	if (c)
 +	{
++		plane = node->plane;
++		dot = plane->inormal[0] * modelorg_i[0] + plane->inormal[1] * modelorg_i[1] +
++			plane->inormal[2] * modelorg_i[2] - plane->idist;
++		front = dot > -BACKFACE_DIST_I;
++		back = dot < BACKFACE_DIST_I;
 +		surf = cl.worldmodel->surfaces + node->firstsurface;
-+		for ( ; c ; c--, surf++)
++		seen = cl.worldmodel->mapseen + node->firstsurface;
++		for ( ; c ; c--, surf++, seen++)
 +		{
 +			if (surf->visframe != r_framecount)
 +				continue;
-+			if ((dot < 0) ^ !!(surf->flags & SURF_PLANEBACK))
++			if (!((surf->flags & SURF_PLANEBACK) ? back : front))
 +				continue;		// wrong side
++			*seen = 1;		// for the map
 +			t = surf->texinfo->texture;
 +			surf->texturechain = t->texturechain;
 +			t->texturechain = surf;
 +		}
 +	}
-+
-+// recurse down the back side
-+	R_RecursiveWorldNode (node->children[!side], clipflags);
 +}
 +
 +static void R_DrawWorld (void)
@@ -1821,6 +2011,11 @@ index 0000000..7534cc2
 +		t = i < mod->numtextures ? mod->textures[i] : r_notexture_mip;
 +		if (!t || !t->texturechain)
 +			continue;
++		if (t->texturechain->flags & SURF_DRAWSKY)
++		{
++			R_DrawSkySurfaces (mod, t);
++			continue;
++		}
 +		anim = R_TextureAnimation (t);
 +		R_BindBrushTexture (anim, t->texturechain);
 +		for (s = t->texturechain; s; s = s->texturechain)
@@ -1907,7 +2102,7 @@ index 0000000..7534cc2
 +	return c->light;
 +}
 +
-+static void R_DrawAliasModel (entity_t *e, int minlight)
++HOT_CODE static void R_DrawAliasModel (entity_t *e, int minlight)
 +{
 +	model_t		*clmodel = e->model;
 +	aliashdr_t	*paliashdr;
@@ -1917,7 +2112,7 @@ index 0000000..7534cc2
 +	gxalias_t	*gx;
 +	gxtex_t		*tex = NULL;
 +	vec3_t		mins, maxs, angles, forward, right, up, dist;
-+	float		m[4][3], add;
++	float		m[4][3], add, units, *eye;
 +	int			i, j, skin, lnum, light, shade, n;
 +	unsigned	*st;
 +	u16			*dots;
@@ -1960,22 +2155,36 @@ index 0000000..7534cc2
 +	shade = light * GX_NORMAL_LIGHT * 256 / 200;
 +	dots = gx_dots[((int)(e->angles[1] * (SHADEDOT_QUANT / 360.0))) & (SHADEDOT_QUANT - 1)];
 +
-+	// the vertices are bytes scaled by the model, the "stupid quake bug"
-+	// flips the pitch of alias models
++	// the vertices are bytes scaled by the model, sent doubled as 10-bit
++	// vertices, a 64th of the 16-bit ones with one write instead of two. The
++	// "stupid quake bug" flips the pitch of alias models
 +	angles[0] = -e->angles[0];
 +	angles[1] = e->angles[1];
 +	angles[2] = e->angles[2];
 +	AngleVectors (angles, forward, right, up);
 +	for (i = 0; i < 3; i++)
 +	{
-+		m[0][i] = forward[i] * pmdl->scale[0] * (4096 * MATRIX_SCALE_W);
-+		m[1][i] = -right[i] * pmdl->scale[1] * (4096 * MATRIX_SCALE_W);
-+		m[2][i] = up[i] * pmdl->scale[2] * (4096 * MATRIX_SCALE_W);
-+		m[3][i] = (e->origin[i] + forward[i] * pmdl->scale_origin[0] -
-+			right[i] * pmdl->scale_origin[1] + up[i] * pmdl->scale_origin[2]) * MATRIX_SCALE_W;
++		m[0][i] = forward[i] * pmdl->scale[0] * 32;
++		m[1][i] = -right[i] * pmdl->scale[1] * 32;
++		m[2][i] = up[i] * pmdl->scale[2] * 32;
++		m[3][i] = e->origin[i] + forward[i] * pmdl->scale_origin[0] -
++			right[i] * pmdl->scale_origin[1] + up[i] * pmdl->scale_origin[2];
++	}
++	// straight to eye space, x right, y up, looking down -z, so the position
++	// relative to the eye isn't the difference of two rounded positions. The
++	// gun stays with the view when R_AwayFromLiquid moved the eye
++	units = (e == &cl.viewent ? VIEWMODEL_UNITS : 1) * MATRIX_SCALE_W;
++	eye = e == &cl.viewent ? r_refdef.vieworg : r_origin;
++	VectorSubtract (m[3], eye, m[3]);
++	for (i = 0; i < 4; i++)
++	{
++		VectorCopy (m[i], dist);
++		m[i][0] = DotProduct (dist, vright) * units;
++		m[i][1] = DotProduct (dist, vup) * units;
++		m[i][2] = -DotProduct (dist, vpn) * units;
 +	}
 +	MATRIX_PUSH = 0;
-+	R_LoadMatrix (m, true);
++	R_LoadMatrix (m, false);
 +
 +	R_BindTexture (tex->param, tex->scale);
 +	GFX_POLY_FORMAT = POLY_ALPHA (31) | POLY_CULL_FRONT;
@@ -1985,22 +2194,40 @@ index 0000000..7534cc2
 +	for (i = 0, v = verts; i < pmdl->numverts; i++, v++)
 +	{
 +		alias_color[i] = GRAY (MIN ((dots[v->lightnormalindex] * shade) >> 16, 31));
-+		alias_xy[i] = v->v[0] | (v->v[1] << 16);
-+		alias_z[i] = v->v[2];
++		alias_xyz[i] = (v->v[0] << 1) | (v->v[1] << 11) | (v->v[2] << 21);
 +	}
 +
-+	tris = (mtriangle_t *)((byte *)paliashdr + paliashdr->triangles);
-+	GFX_BEGIN = GL_TRIANGLES;
-+	for (i = 0; i < pmdl->numtris; i++, tris++)
++	if (gx->strips)
 +	{
-+		st = tris->facesfront ? gx->st : gx->st + pmdl->numverts;
-+		for (j = 0; j < 3; j++)
++		const u16	*cmd = gx->strips;
++
++		while ((j = *cmd++))
 +		{
-+			n = tris->vertindex[j];
-+			GFX_COLOR = alias_color[n];
-+			GFX_TEX_COORD = st[n];
-+			GFX_VERTEX16 = alias_xy[n];
-+			GFX_VERTEX16 = alias_z[n];
++			st = *cmd++ ? gx->st : gx->st + pmdl->numverts;
++			GFX_BEGIN = GL_TRIANGLE_STRIP;
++			for (; j; j--)
++			{
++				n = *cmd++;
++				GFX_COLOR = alias_color[n];
++				GFX_TEX_COORD = st[n];
++				GFX_VERTEX10 = alias_xyz[n];
++			}
++		}
++	}
++	else
++	{
++		tris = (mtriangle_t *)((byte *)paliashdr + paliashdr->triangles);
++		GFX_BEGIN = GL_TRIANGLES;
++		for (i = 0; i < pmdl->numtris; i++, tris++)
++		{
++			st = tris->facesfront ? gx->st : gx->st + pmdl->numverts;
++			for (j = 0; j < 3; j++)
++			{
++				n = tris->vertindex[j];
++				GFX_COLOR = alias_color[n];
++				GFX_TEX_COORD = st[n];
++				GFX_VERTEX10 = alias_xyz[n];
++			}
 +		}
 +	}
 +	c_alias_polys += pmdl->numtris;
@@ -2112,9 +2339,9 @@ index 0000000..7534cc2
 +	GFX_BEGIN = GL_TRIANGLES;
 +}
 +
-+void D_DrawParticle (particle_t *p)
++HOT_CODE void D_DrawParticle (particle_t *p)
 +{
-+	int		x, y, z, ux, uy, uz, rx, ry, rz, scale;
++	int		x, y, z, ux, uy, uz, rx, ry, rz, depth, scale;
 +
 +	if (gx_particles++ >= MAX_PARTICLES_DRAWN)
 +		return;
@@ -2124,10 +2351,16 @@ index 0000000..7534cc2
 +	z = p->org[2] * VERTEX_SCALE;
 +
 +	// hack a scale up to keep particles from disapearing: 1.5 units and
-+	// 0.006 per unit of distance, in 1/8 units times 1.14
-+	scale = ((x - modelorg_i[0]) * particle_vpn[0] + (y - modelorg_i[1]) * particle_vpn[1] +
++	// 0.006 per unit of distance, in 1/8 units times 1.14. Like the software
++	// renderer the ones closer than 8 units are left out and the others are
++	// at most about 4 pixels, close to the eye they would cover the screen.
++	depth = ((x - modelorg_i[0]) * particle_vpn[0] + (y - modelorg_i[1]) * particle_vpn[1] +
 +		(z - modelorg_i[2]) * particle_vpn[2]) >> 14;
-+	scale = scale < 20 * VERTEX_SCALE ? 12 : 12 + scale * 6 / 1000;
++	if (depth < 8 * VERTEX_SCALE)
++		return;
++	scale = depth < 20 * VERTEX_SCALE ? 12 : 12 + ((depth * 393) >> 16);	// 0.006 per unit
++	if (scale > depth >> 5)
++		scale = depth >> 5;
 +	ux = (particle_up[0] * scale) >> 14;
 +	uy = (particle_up[1] * scale) >> 14;
 +	uz = (particle_up[2] * scale) >> 14;
@@ -2202,43 +2435,121 @@ index 0000000..7534cc2
 +	}
 +}
 +
++/*
++================
++R_SetProjection
++
++The perspective, a transposed OpenGL matrix times scale, for eye space in
++units / 512 world units and the near plane at near
++================
++*/
++static void R_SetProjection (float scale, float units, float near)
++{
++	static float	fov_y = -1, f;
++	float			a, b;
++
++	if (r_refdef.fov_y != fov_y)
++	{
++		fov_y = r_refdef.fov_y;
++		f = 1 / tan (fov_y * (float)(M_PI / 360));
++	}
++	a = (FAR_PLANE + near) / (near - FAR_PLANE);
++	b = 2 * FAR_PLANE * near / (near - FAR_PLANE) * units;
++	MATRIX_CONTROL = GL_PROJECTION;
++	MATRIX_LOAD4x4 = F32 (f * 192 / 256 * scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = F32 (f * scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = F32 (a * scale);
++	MATRIX_LOAD4x4 = F32 (-scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_LOAD4x4 = F32 (b * scale);
++	MATRIX_LOAD4x4 = 0;
++	MATRIX_CONTROL = GL_MODELVIEW;
++}
++
++#define	IS_LIQUID(c)	((c) <= CONTENTS_WATER && (c) >= CONTENTS_LAVA)
++
++/*
++================
++R_AwayFromLiquid
++
++Swimming, the eye gets as close as the 1/32 unit view.c keeps it to the
++surface of the liquid. Looking along it the near plane would cut out of
++view all of it below the middle, so the eye goes up or down to dist from
++it: the near plane over the cosine of half the vertical field of view, how
++close the top or bottom edge of the view gets to it, pitched either way.
++Returns whether it moved the eye.
++================
++*/
++static qboolean R_AwayFromLiquid (mleaf_t *leaf, float dist)
++{
++	vec3_t	p;
++	int		dir, i, c;
++	float	lo, hi, mid;
++	qboolean	liquid = IS_LIQUID (leaf->contents);
++
++	// the surface is a side of the leaf, a unit within its bounds
++	if (leaf->minmaxs[2] < r_origin[2] - dist - 1 && leaf->minmaxs[5] > r_origin[2] + dist + 1)
++		return false;
++	for (dir = -1; dir <= 1; dir += 2)
++	{
++		VectorCopy (r_origin, p);
++		p[2] += dir * dist;
++		c = Mod_PointInLeaf (p, cl.worldmodel)->contents;
++		if (c == CONTENTS_SOLID || IS_LIQUID (c) == liquid)
++			continue;
++		// the surface is between lo and hi
++		for (i = 0, lo = 0, hi = dist; i < 6; i++)
++		{
++			mid = (lo + hi) / 2;
++			p[2] = r_origin[2] + dir * mid;
++			if (IS_LIQUID (Mod_PointInLeaf (p, cl.worldmodel)->contents) == liquid)
++				lo = mid;
++			else
++				hi = mid;
++		}
++		r_origin[2] -= dir * (dist - lo);
++		return true;
++	}
++	return false;
++}
++
 +void R_SetupFrame (void)
 +{
-+	float	m[4][3], f;
++	static float	fov_x = -1, fov_y, liquid_dist;
++	float	m[4][3];
 +	int		i;
 +
 +	R_AnimateLight ();
 +	r_framecount++;
++
++	// the top screen is 4:3, whatever the 2D view rectangle
++	if (r_refdef.fov_x != fov_x)
++	{
++		fov_x = r_refdef.fov_x;
++		fov_y = atan (tan (fov_x * M_PI / 360) * 192 / 256) * 360 / M_PI;
++		liquid_dist = NEAR_PLANE * 512 / cos (fov_y * M_PI / 360) + 0.125f;
++	}
++	r_refdef.fov_y = fov_y;
 +
 +	VectorCopy (r_refdef.vieworg, r_origin);
 +	AngleVectors (r_refdef.viewangles, vpn, vright, vup);
 +
 +	r_oldviewleaf = r_viewleaf;
 +	r_viewleaf = Mod_PointInLeaf (r_origin, cl.worldmodel);
++	if (R_AwayFromLiquid (r_viewleaf, liquid_dist))
++		r_viewleaf = Mod_PointInLeaf (r_origin, cl.worldmodel);
 +	V_SetContentsColor (r_viewleaf->contents);
 +
-+	// the top screen is 4:3, whatever the 2D view rectangle
-+	r_refdef.fov_y = atan (tan (r_refdef.fov_x * M_PI / 360) * 192 / 256) * 360 / M_PI;
-+
-+	// projection, the transposed OpenGL matrix
-+	f = 1 / tan (r_refdef.fov_y * M_PI / 360);
-+	MATRIX_CONTROL = GL_PROJECTION;
-+	MATRIX_LOAD4x4 = F32 (f * 192 / 256);
-+	MATRIX_LOAD4x4 = 0;
-+	MATRIX_LOAD4x4 = 0;
-+	MATRIX_LOAD4x4 = 0;
-+	MATRIX_LOAD4x4 = 0;
-+	MATRIX_LOAD4x4 = F32 (f);
-+	MATRIX_LOAD4x4 = 0;
-+	MATRIX_LOAD4x4 = 0;
-+	MATRIX_LOAD4x4 = 0;
-+	MATRIX_LOAD4x4 = 0;
-+	MATRIX_LOAD4x4 = F32 ((FAR_PLANE + NEAR_PLANE) / (NEAR_PLANE - FAR_PLANE));
-+	MATRIX_LOAD4x4 = -4096;
-+	MATRIX_LOAD4x4 = 0;
-+	MATRIX_LOAD4x4 = 0;
-+	MATRIX_LOAD4x4 = F32 (2 * FAR_PLANE * NEAR_PLANE / (NEAR_PLANE - FAR_PLANE));
-+	MATRIX_LOAD4x4 = 0;
++	R_SetProjection (WORLD_W_SCALE, 1, NEAR_PLANE);
 +
 +	// world to eye space: x right, y up, looking down -z
 +	MATRIX_CONTROL = GL_MODELVIEW;
@@ -2259,7 +2570,13 @@ index 0000000..7534cc2
 +	r_numdlights = 0;
 +	for (i = 0; i < MAX_DLIGHTS; i++)
 +		if (cl_dlights[i].die >= cl.time && cl_dlights[i].radius)
++		{
 +			r_dlights[r_numdlights++] = &cl_dlights[i];
++			r_dlight_i[i][0] = cl_dlights[i].origin[0];
++			r_dlight_i[i][1] = cl_dlights[i].origin[1];
++			r_dlight_i[i][2] = cl_dlights[i].origin[2];
++			r_dlight_i[i][3] = cl_dlights[i].radius;
++		}
 +
 +	c_brush_polys = 0;
 +	c_alias_polys = 0;
@@ -2296,6 +2613,39 @@ index 0000000..7534cc2
 +	currententity = &r_worldentity;
 +}
 +
++// Starts drawing rectangles on the screen, in front of everything
++static void R_BeginScreen (unsigned polyformat, u16 color)
++{
++	int	i;
++
++	// the identity, but with w SCREEN_W
++	MATRIX_CONTROL = GL_PROJECTION;
++	for (i = 0; i < 16; i++)
++		MATRIX_LOAD4x4 = i == 15 ? SCREEN_W : i % 5 ? 0 : 4096;
++	MATRIX_CONTROL = GL_MODELVIEW;
++	MATRIX_IDENTITY = 0;
++	GFX_TEX_FORMAT = 0;
++	GFX_POLY_FORMAT = polyformat;
++	GFX_COLOR = color;
++	GFX_BEGIN = GL_QUADS;
++}
++
++// A rectangle of whole pixels of the top screen, x and y the top left one
++static void R_ScreenRect (int x, int y, int w, int h)
++{
++	int	x1 = x * SCREEN_W / 128 - SCREEN_W, x2 = (x + w) * SCREEN_W / 128 - SCREEN_W;
++	int	y1 = SCREEN_W - (y * SCREEN_W + 95) / 96, y2 = SCREEN_W - ((y + h) * SCREEN_W + 95) / 96;
++
++	GFX_VERTEX16 = VERTEX_PACK (x1, y1);
++	GFX_VERTEX16 = 0;
++	GFX_VERTEX16 = VERTEX_PACK (x2, y1);
++	GFX_VERTEX16 = 0;
++	GFX_VERTEX16 = VERTEX_PACK (x2, y2);
++	GFX_VERTEX16 = 0;
++	GFX_VERTEX16 = VERTEX_PACK (x1, y2);
++	GFX_VERTEX16 = 0;
++}
++
 +static void R_DrawViewModel (void)
 +{
 +	if (!r_drawviewmodel.value || !r_drawentities.value || chase_active.value)
@@ -2307,9 +2657,33 @@ index 0000000..7534cc2
 +	currententity = &cl.viewent;
 +	if (!currententity->model)
 +		return;
-+	// always give some light on gun
++	// always give some light on gun, in the finer units of its matrix
++	R_SetProjection (1, VIEWMODEL_UNITS, VIEWMODEL_NEAR);
 +	R_DrawAliasModel (currententity, 24);
++	R_SetProjection (WORLD_W_SCALE, 1, NEAR_PLANE);
 +	currententity = &r_worldentity;
++}
++
++/*
++================
++R_DrawCrosshair
++
++A cross of 7 by 7 pixels around the pixel right below the middle of the
++view, in front of everything. It's translucent, though as good as opaque,
++the edge marking would outline it.
++================
++*/
++static void R_DrawCrosshair (void)
++{
++	int	x = 256 / 2 + (int) cl_crossx.value, y = 192 / 2 + (int) cl_crossy.value;
++
++	if (!crosshair.value)
++		return;
++
++	R_BeginScreen (POLY_ALPHA (30) | POLY_CULL_NONE | POLY_ID (2), RGB15 (31, 31, 31));
++	R_ScreenRect (x - 3, y, 7, 1);
++	R_ScreenRect (x, y - 3, 1, 3);
++	R_ScreenRect (x, y + 1, 1, 3);
 +}
 +
 +/*
@@ -2319,6 +2693,13 @@ index 0000000..7534cc2
 +r_refdef must be set before the first call
 +================
 +*/
++// The menu is on the top screen over the view, which is darker behind it
++static void R_DimView (void)
++{
++	R_BeginScreen (POLY_ALPHA (DIM_ALPHA) | POLY_CULL_NONE | POLY_ID (1), 0);
++	R_ScreenRect (0, 0, 256, 192);
++}
++
 +void R_RenderView (void)
 +{
 +	double	time1 = 0;
@@ -2329,16 +2710,16 @@ index 0000000..7534cc2
 +	if (r_speeds.value)
 +		time1 = Sys_FloatTime ();
 +
-+	// the 3D view is on the top screen, clear its place on the touch screen
-+	VID_ClearRect (&scr_vrect);
-+
 +	R_SetupFrame ();
 +	R_SetFrustum ();
 +	R_MarkLeaves ();
 +	R_DrawWorld ();
 +	R_DrawEntitiesOnList ();
-+	R_DrawViewModel ();
 +	R_DrawParticles ();
++	R_DrawViewModel ();
++	R_DrawCrosshair ();
++	if (key_dest == key_menu || scr_drawdialog)
++		R_DimView ();
 +	VID_Flush3D ();
 +
 +	if (r_speeds.value)
@@ -2440,45 +2821,24 @@ index 0000000..7534cc2
 +	R_ClearParticles ();
 +
 +	R_UploadModelTextures ();
++	// the temporary memory the skins were read into goes to the cache
++	Hunk_FreeTemp ();
 +}
 +
 +/*
 +================
 +R_SetVrect
 +
-+The rectangle the software renderer would draw the view in, the 2D drawing
-+on the touch screen leaves it free
++The 3D view is on the top screen, on the touch screen all of the 2D drawing
++below the status bar is the view, the touch screen keeps it drawn
 +================
 +*/
 +void R_SetVrect (vrect_t *pvrectin, vrect_t *pvrect, int lineadj)
 +{
-+	int		h;
-+	float	size;
-+
-+	size = scr_viewsize.value > 100 ? 100 : scr_viewsize.value;
-+	if (cl.intermission)
-+	{
-+		size = 100;
-+		lineadj = 0;
-+	}
-+	size /= 100;
-+
-+	h = pvrectin->height - lineadj;
-+	pvrect->width = pvrectin->width * size;
-+	if (pvrect->width < 96)
-+	{
-+		size = 96.0 / pvrectin->width;
-+		pvrect->width = 96;	// min for icons
-+	}
-+	pvrect->width &= ~7;
-+	pvrect->height = pvrectin->height * size;
-+	if (pvrect->height > pvrectin->height - lineadj)
-+		pvrect->height = pvrectin->height - lineadj;
-+
-+	pvrect->height &= ~1;
-+
-+	pvrect->x = (pvrectin->width - pvrect->width)/2;
-+	pvrect->y = (h - pvrect->height)/2;
++	pvrect->x = 0;
++	pvrect->y = lineadj;
++	pvrect->width = pvrectin->width;
++	pvrect->height = pvrectin->height - lineadj;
 +}
 +
 +void R_ViewChanged (vrect_t *pvrect, int lineadj, float aspect)
@@ -2497,543 +2857,35 @@ index 0000000..7534cc2
 +void D_UpdateRects (vrect_t *prect)
 +{
 +}
-diff --git a/WinQuake/r_part.c b/WinQuake/r_part.c
-index 7e3d5cd..6893563 100644
---- a/WinQuake/r_part.c
-+++ b/WinQuake/r_part.c
-@@ -22,7 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- #include "r_local.h"
- 
- #ifdef __NDS__
--#define MAX_PARTICLES			1024	// the DS has little RAM and a small screen
-+#define MAX_PARTICLES			512		// the DS has little RAM and a small screen
- #else
- #define MAX_PARTICLES			2048	// default max # of particles at one
- 										//  time
-diff --git a/WinQuake/snd_dma.c b/WinQuake/snd_dma.c
-index 224b498..b810615 100644
---- a/WinQuake/snd_dma.c
-+++ b/WinQuake/snd_dma.c
-@@ -610,8 +610,10 @@ void S_ClearBuffer (void)
- 		Q_memset(shm->buffer, clear, shm->samples * shm->samplebits/8);
- 	}
- 
--	// A driver that copies the buffer now plays the silence at once
--	SNDDMA_Submit ();
-+#ifdef __NDS__
-+	// the DS driver plays a copy of the buffer, which it clears too
-+	SNDDMA_ClearBuffer ();
-+#endif
- }
- 
- 
-diff --git a/WinQuake/snd_nds.c b/WinQuake/snd_nds.c
-index d09d8bc..efe7299 100644
---- a/WinQuake/snd_nds.c
-+++ b/WinQuake/snd_nds.c
-@@ -20,15 +20,17 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- // snd_nds.c -- Nintendo DS sound output
- //
- // Quake mixes into a 16-bit stereo ring buffer as if it was a DMA buffer.
--// The hardware only plays mono samples, so each submit splits it into a left
--// and a right ring buffer, which loop forever on two hardware channels panned
--// hard left and right. The play position follows from the time since they
-+// The hardware only plays mono samples, so each submit splits what was mixed
-+// into a left and a right ring buffer, which loop forever on two hardware
-+// channels panned hard left and right. The play position follows from the time since they
- // started, the sound and tick timers share a clock.
- 
- #include "quakedef.h"
- 
- #include <nds.h>
- 
-+extern int	paintedtime;
-+
- #define	SND_SPEED	11025
- #define	SND_FRAMES	4096		// per channel, a power of two
- #define	SND_CH_LEFT	0
-@@ -38,6 +40,7 @@ static short	mixbuffer[SND_FRAMES * 2] __attribute__((aligned(32)));
- static short	outbuffer[2][SND_FRAMES] __attribute__((aligned(32)));
- static unsigned	snd_timer;
- static u64	snd_start;
-+static int	snd_submitted;		// paintedtime copied to the output buffers
- 
- qboolean SNDDMA_Init (void)
- {
-@@ -81,21 +84,27 @@ int SNDDMA_GetDMAPos (void)
- 
- void SNDDMA_Submit (void)
- {
--	u32	*in = (u32 *) mixbuffer;
--	u32	*left = (u32 *) outbuffer[0], *right = (u32 *) outbuffer[1];
--	u32	a, b;
--	int	i;
--
--	// The whole ring, so a cleared buffer is silent at once. Two stereo
--	// frames at a time: LLRR words out of two LRLR words.
--	for (i = 0; i < SND_FRAMES / 2; i++)
-+	int	from, frame;
-+
-+	// only what was mixed since the last submit, or everything after a jump
-+	from = snd_submitted;
-+	if (paintedtime - from > SND_FRAMES || paintedtime < from)
-+		from = paintedtime - SND_FRAMES;
-+	for (; from < paintedtime; from++)
- 	{
--		a = *in++;
--		b = *in++;
--		*left++ = (a & 0xffff) | (b << 16);
--		*right++ = (a >> 16) | (b & 0xffff0000);
-+		frame = from & (SND_FRAMES - 1);
-+		outbuffer[0][frame] = mixbuffer[frame * 2];
-+		outbuffer[1][frame] = mixbuffer[frame * 2 + 1];
- 	}
-+	snd_submitted = paintedtime;
-+	armDCacheFlush (outbuffer, sizeof(outbuffer));
-+}
-+
-+void SNDDMA_ClearBuffer (void)
-+{
-+	memset (outbuffer, 0, sizeof(outbuffer));
- 	armDCacheFlush (outbuffer, sizeof(outbuffer));
-+	snd_submitted = paintedtime;
- }
- 
- void SNDDMA_Shutdown (void)
-diff --git a/WinQuake/sound.h b/WinQuake/sound.h
-index 1ba08d3..636dacc 100644
---- a/WinQuake/sound.h
-+++ b/WinQuake/sound.h
-@@ -171,6 +171,10 @@ wavinfo_t GetWavinfo (char *name, byte *wav, int wavlength);
- void SND_InitScaletable (void);
- void SNDDMA_Submit(void);
- 
-+#ifdef __NDS__
-+void SNDDMA_ClearBuffer(void);
-+#endif
-+
- void S_AmbientOff (void);
- void S_AmbientOn (void);
- 
-diff --git a/WinQuake/sv_main.c b/WinQuake/sv_main.c
-index deda690..51b9237 100644
---- a/WinQuake/sv_main.c
-+++ b/WinQuake/sv_main.c
-@@ -1097,6 +1097,11 @@ void SV_SpawnServer (char *server)
- 
- // allocate server memory
- 	sv.max_edicts = MAX_EDICTS;
-+#ifdef __NDS__
-+	// the 4 MiB of the DS have room for fewer, still plenty for the id maps
-+	if (host_parms.memsize < 0x800000)
-+		sv.max_edicts = 448;
-+#endif
- 	
- 	sv.edicts = Hunk_AllocName (sv.max_edicts*pr_edict_size, "edicts");
- 
-diff --git a/WinQuake/sys.h b/WinQuake/sys.h
-index c5d61a7..503cdc9 100644
---- a/WinQuake/sys.h
-+++ b/WinQuake/sys.h
-@@ -50,6 +50,11 @@ void Sys_Error (char *error, ...);
- // an error will cause the entire program to exit
- 
- void Sys_Printf (char *fmt, ...);
-+
-+#ifdef __NDS__
-+void Sys_EndTextConsole (void);
-+// the touch screen stops showing the text console, the video driver takes it
-+#endif
- // send text to the console
- 
- void Sys_Quit (void);
-diff --git a/WinQuake/sys_nds.c b/WinQuake/sys_nds.c
-index 8ae93bf..eca236e 100644
---- a/WinQuake/sys_nds.c
-+++ b/WinQuake/sys_nds.c
-@@ -20,7 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- // sys_nds.c -- Nintendo DS system driver
- //
- // Quake runs in its own thread, the ARM9 main stack lives in the 16 KiB DTCM
--// and Quake keeps big arrays on the stack. The hunk takes all RAM that is
-+// and Quake keeps arrays of up to 32 KiB on the stack. The hunk takes all RAM that is
- // left, 4 MiB on the DS and 16 MiB on the DSi. Game data comes from NitroFS
- // (embedded in the ROM) and /data/quake/ on the SD card, which also holds
- // the config and savegames.
-@@ -35,14 +35,15 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- #include <unistd.h>
- 
- #define DATA_DIR		"/data/quake"
--#define QUAKE_STACK_SIZE	(256 * 1024)
--// Memory left outside the hunk for libc, file buffers and the console
--#define HUNK_RESERVE		(256 * 1024)
-+#define QUAKE_STACK_SIZE	(64 * 1024)
-+// Memory left outside the hunk for libc, which needs little once running
-+#define HUNK_RESERVE		(64 * 1024)
- #define MAX_ARGS		32
- 
- qboolean	isDedicated = false;
- 
- static Thread	quake_thread;
-+static qboolean	textconsole = true;	// the touch screen shows the text console
- static TickTask	tick_task;
- 
- // The tick counter behind Sys_FloatTime only runs while a tick task is
-@@ -180,10 +181,16 @@ static void Sys_PrintText (const char *text)
- 			*out++ = c;
- 	}
- 	*out = 0;
--	fputs (plain, stdout);
-+	if (textconsole)
-+		fputs (plain, stdout);
- 	nocashMessage (plain);
- }
- 
-+void Sys_EndTextConsole (void)
-+{
-+	textconsole = false;
-+}
-+
- void Sys_Printf (char *fmt, ...)
- {
- 	va_list	argptr;
-@@ -206,6 +213,11 @@ void Sys_Error (char *error, ...)
- 
- 	if (shm)
- 		SNDDMA_Shutdown ();
-+	if (!textconsole)
-+	{
-+		consoleDemoInit ();
-+		textconsole = true;
-+	}
- 	printf ("\n\x1b[31;1mError:\x1b[39;0m ");
- 	Sys_PrintText (text);
- 	printf ("\n\nPress START to exit\n");
-@@ -224,7 +236,7 @@ void Sys_Quit (void)
- 
- double Sys_FloatTime (void)
- {
--	return (double) tickGetCount () / TICK_FREQ;
-+	return tickGetCount () * (1.0 / TICK_FREQ);
- }
- 
- char *Sys_ConsoleInput (void)
 diff --git a/WinQuake/vid.h b/WinQuake/vid.h
-index 1708ba8..0001882 100644
+index 5fb7e0e..eeb4139 100644
 --- a/WinQuake/vid.h
 +++ b/WinQuake/vid.h
-@@ -66,6 +66,17 @@ void	VID_ShiftPalette (unsigned char *palette);
- // called for bonus and pain flashes, and for underwater color changes
+@@ -70,6 +70,9 @@ void	VID_Init (unsigned char *palette);
+ // the palette data will go away after the call, so it must be copied off if
+ // the video driver will need it again
  
- void	VID_Init (unsigned char *palette);
-+
-+#ifdef __NDS__
-+void	VID_ClearRect (vrect_t *rect);
-+// clears the view rectangle of the 2D drawing, which is on the touch screen
-+
 +void	VID_Flush3D (void);
 +// shows the 3D frame on the top screen from the next vblank
 +
-+void	VID_MarkRows (int y, int height);
-+// the 2D drawing changed these rows, only they are copied to the touch screen
-+#endif
- // Called at startup to set up translation tables, takes 256 8 bit RGB values
- // the palette data will go away after the call, so it must be copied off if
- // the video driver will need it again
-diff --git a/WinQuake/vid_nds.c b/WinQuake/vid_nds.c
-index 00856f4..d6115a2 100644
---- a/WinQuake/vid_nds.c
-+++ b/WinQuake/vid_nds.c
-@@ -19,22 +19,31 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- */
- // vid_nds.c -- Nintendo DS video driver
- //
--// The 320x200 frame is rendered into main RAM, copied into one of two 8bpp
--// bitmap backgrounds in VRAM banks A/B and page flipped on vblank. The affine
--// background hardware scales it to the 256x192 top screen for free, and the
--// palette lives directly in the hardware BG palette. For smoothing, a second
--// affine background samples the same frame at a half pixel offset and is
--// alpha blended on top, a cheap hardware bilinear-like filter.
-+// The top screen shows the 3D hardware (r_nds.c). The touch screen shows
-+// Quake's 2D drawing: status bar, console, menus and messages go into a
-+// 320x200 buffer in main RAM, copied into an 8bpp bitmap background in VRAM
-+// bank C and scaled to 256x192 by the affine background hardware. A second
-+// affine layer samples it half a pixel further and is alpha blended on top,
-+// a cheap hardware bilinear-like filter (vid_smooth). The palette goes to
-+// both the touch screen and the texture palette, so the palette shifts for
-+// damage and pickups tint both for free. The texture palette is twice as
-+// bright, so the vertex light can go up to double like the software renderer.
- 
- #include "quakedef.h"
- #include "d_local.h"
- 
- #include <nds.h>
- 
-+#define	min(a,b)	((a) < (b) ? (a) : (b))
-+#define	max(a,b)	((a) > (b) ? (a) : (b))
-+
- #define	BASEWIDTH	320
- #define	BASEHEIGHT	200
- #define	FB_STRIDE	512
- 
-+// The DS screens are darker than the CRTs Quake was made for
-+#define	SCREEN_GAMMA	0.7
-+
- // Scale factors in 8.8 fixed point: 320 -> 256 and 200 -> 192
- #define	SCALE_X		((BASEWIDTH << 8) / 256)
- #define	SCALE_Y		((BASEHEIGHT << 8) / 192)
-@@ -43,28 +52,31 @@ unsigned short	d_8to16table[256];
- unsigned	d_8to24table[256];
- 
- static cvar_t	vid_smooth = {"vid_smooth", "1", true};
-+static cvar_t	vid_showfps = {"vid_showfps", "0"};	// 2 also logs to no$gba
- 
- static u16		palette[256] __attribute__((aligned(4)));
-+static u16		texpalette[256] __attribute__((aligned(4)));	// twice as bright
- static volatile qboolean	palette_dirty;
--static volatile int	shown_page, pending_page = -1;
- static int		smoothing = -1;
-+static byte		screengamma[256];
-+
-+// Rows changed this frame, to copy to VRAM, and rows drawn this and the last
-+// frame, the view rectangle is cleared where something was drawn before
-+static int		copy_top, copy_bottom;
-+static int		drawn_top, drawn_bottom, olddrawn_top, olddrawn_bottom;
-+static byte		vid_buffer[BASEWIDTH * BASEHEIGHT] __attribute__((aligned(32)));
- 
- static void VID_VBlank (void)
- {
- 	// A CPU copy, DMA would miss palette writes still in the data cache
- 	if (palette_dirty)
+ // the text layer of the top screen, for messages and center prints
+ #define	TEXT_WIDTH		256
+ #define	TEXT_HEIGHT		192
+diff --git a/WinQuake/view.c b/WinQuake/view.c
+index ececf8c..a0d4434 100644
+--- a/WinQuake/view.c
++++ b/WinQuake/view.c
+@@ -1052,13 +1052,6 @@ void V_RenderView (void)
  	{
--		memcpy (BG_PALETTE, palette, sizeof(palette));
-+		memcpy (BG_PALETTE_SUB, palette, sizeof(palette));
-+		vramSetBankE (VRAM_E_LCD);
-+		memcpy (VRAM_E, texpalette, sizeof(texpalette));
-+		vramSetBankE (VRAM_E_TEX_PALETTE);
- 		palette_dirty = false;
+ 		R_RenderView ();
  	}
--	if (pending_page >= 0)
--	{
--		u16 base = BG_MAP_BASE(pending_page * 8);
--		REG_BG2CNT = (REG_BG2CNT & ~(31 << MAP_BASE_SHIFT)) | base;
--		REG_BG3CNT = (REG_BG3CNT & ~(31 << MAP_BASE_SHIFT)) | base;
--		shown_page = pending_page;
--		pending_page = -1;
--	}
- }
- 
- static void VID_SetSmoothing (qboolean enable)
-@@ -72,14 +84,14 @@ static void VID_SetSmoothing (qboolean enable)
- 	smoothing = enable;
- 	if (enable)
- 	{
--		REG_DISPCNT |= DISPLAY_BG2_ACTIVE;
--		REG_BLDCNT = BLEND_ALPHA | BLEND_SRC_BG2 | BLEND_DST_BG3;
--		REG_BLDALPHA = 8 | (8 << 8);
-+		REG_DISPCNT_SUB |= DISPLAY_BG2_ACTIVE;
-+		REG_BLDCNT_SUB = BLEND_ALPHA | BLEND_SRC_BG2 | BLEND_DST_BG3;
-+		REG_BLDALPHA_SUB = 8 | (8 << 8);
- 	}
- 	else
- 	{
--		REG_DISPCNT &= ~DISPLAY_BG2_ACTIVE;
--		REG_BLDCNT = BLEND_NONE;
-+		REG_DISPCNT_SUB &= ~DISPLAY_BG2_ACTIVE;
-+		REG_BLDCNT_SUB = BLEND_NONE;
- 	}
- }
- 
-@@ -87,8 +99,16 @@ void VID_SetPalette (unsigned char *pal)
- {
- 	int	i;
- 
-+	int	r, g, b;
-+
- 	for (i = 0; i < 256; i++, pal += 3)
--		palette[i] = RGB15(pal[0] >> 3, pal[1] >> 3, pal[2] >> 3);
-+	{
-+		r = screengamma[pal[0]];
-+		g = screengamma[pal[1]];
-+		b = screengamma[pal[2]];
-+		palette[i] = RGB15(r >> 3, g >> 3, b >> 3);
-+		texpalette[i] = RGB15(min (r >> 2, 31), min (g >> 2, 31), min (b >> 2, 31));
-+	}
- 	palette_dirty = true;
- }
- 
-@@ -99,35 +119,47 @@ void VID_ShiftPalette (unsigned char *pal)
- 
- void VID_Init (unsigned char *pal)
- {
--	int	bg, surfcachesize;
--	byte	*mem;
-+	int	bg, i;
- 
- 	Cvar_RegisterVariable (&vid_smooth);
-+	Cvar_RegisterVariable (&vid_showfps);
-+	for (i = 0; i < 256; i++)
-+		screengamma[i] = pow (i / 255.0, SCREEN_GAMMA) * 255 + 0.5;
- 
- 	vid.maxwarpwidth = vid.width = vid.conwidth = BASEWIDTH;
- 	vid.maxwarpheight = vid.height = vid.conheight = BASEHEIGHT;
- 	vid.aspect = ((float) vid.height / vid.width) * (320.0 / 240.0);
--	vid.numpages = 2;
-+	vid.numpages = 1;
- 	vid.colormap = host_colormap;
- 	vid.fullbright = 256 - LittleLong (*((int *)vid.colormap + 2048));
-+	vid.buffer = vid.conbuffer = vid_buffer;
- 	vid.rowbytes = vid.conrowbytes = BASEWIDTH;
- 
--	// The DS has little RAM to spare, its surface cache is half the usual size
--	surfcachesize = D_SurfaceCacheForRes (BASEWIDTH, BASEHEIGHT);
--	if (!isDSiMode () && !COM_CheckParm ("-surfcachesize"))
--		surfcachesize /= 2;
--	mem = Hunk_HighAllocName (BASEWIDTH * BASEHEIGHT * 3 + surfcachesize, "video");
--	vid.buffer = vid.conbuffer = mem;
--	d_pzbuffer = (short *) (mem + BASEWIDTH * BASEHEIGHT);
--	D_InitCaches (mem + BASEWIDTH * BASEHEIGHT * 3, surfcachesize);
 -
--	videoSetMode (MODE_5_2D);
--	vramSetBankA (VRAM_A_MAIN_BG_0x06000000);
--	vramSetBankB (VRAM_B_MAIN_BG_0x06020000);
--	memset (BG_GFX, 0, 2 * FB_STRIDE * 256);
-+	// the particles are drawn in the base palette colors
-+	for (i = 0; i < 256; i++)
-+		d_8to16table[i] = RGB15(pal[i * 3] >> 3, pal[i * 3 + 1] >> 3, pal[i * 3 + 2] >> 3);
-+
-+	// top screen: 3D, textures in banks A, B and D, palette in E
-+	Sys_EndTextConsole ();
-+	videoSetMode (MODE_0_3D);
-+	glInit ();
-+	glEnable (GL_TEXTURE_2D);
-+	glClearColor (0, 0, 0, 31);
-+	glClearPolyID (63);
-+	glClearDepth (GL_MAX_DEPTH);
-+	glViewport (0, 0, 255, 191);
-+	vramSetBankA (VRAM_A_TEXTURE_SLOT0);
-+	vramSetBankB (VRAM_B_TEXTURE_SLOT1);
-+	vramSetBankD (VRAM_D_TEXTURE_SLOT2);
-+	vramSetBankE (VRAM_E_TEX_PALETTE);
-+
-+	// touch screen: the 2D drawing in bank C
-+	videoSetModeSub (MODE_5_2D);
-+	vramSetBankC (VRAM_C_SUB_BG);
-+	memset (BG_GFX_SUB, 0, FB_STRIDE * 256);
- 	for (bg = 2; bg <= 3; bg++)
- 	{
--		int id = bgInit (bg, BgType_Bmp8, BgSize_B8_512x256, 0, 0);
-+		int id = bgInitSub (bg, BgType_Bmp8, BgSize_B8_512x256, 0, 0);
- 		bgSetPriority (id, bg == 2 ? 0 : 1);
- 		bgSetScale (id, SCALE_X, SCALE_Y);
- 		// The blend layer samples half an output pixel further
-@@ -147,28 +179,99 @@ void VID_Shutdown (void)
- 	irqClear (IRQ_VBLANK);
+-#ifndef GLQUAKE
+-	if (crosshair.value)
+-		Draw_Character (scr_vrect.x + scr_vrect.width/2 + cl_crossx.value, 
+-			scr_vrect.y + scr_vrect.height/2 + cl_crossy.value, '+');
+-#endif
+-		
  }
  
-+/*
-+================
-+VID_ClearRect
-+
-+Clears where the software renderer would have drawn the view, the 2D drawing
-+only redraws what changed
-+================
-+*/
-+void VID_ClearRect (vrect_t *rect)
-+{
-+	int	y, top, bottom;
-+
-+	top = max (rect->y, olddrawn_top);
-+	bottom = min (rect->y + rect->height, olddrawn_bottom);
-+	for (y = top; y < bottom; y++)
-+		memset (vid.buffer + y * vid.rowbytes + rect->x, 0, rect->width);
-+	if (top < bottom)
-+	{
-+		copy_top = min (copy_top, top);
-+		copy_bottom = max (copy_bottom, bottom);
-+	}
-+	olddrawn_top = BASEHEIGHT;
-+	olddrawn_bottom = 0;
-+}
-+
-+void VID_MarkRows (int y, int height)
-+{
-+	y = max (y, 0);
-+	height = min (y + height, BASEHEIGHT);
-+	copy_top = drawn_top = min (drawn_top, y);
-+	copy_bottom = drawn_bottom = max (drawn_bottom, height);
-+}
-+
-+/*
-+================
-+VID_Flush3D
-+
-+Swaps the 3D buffers at the next vblank, the next 3D command waits for it
-+================
-+*/
-+void VID_Flush3D (void)
-+{
-+	GFX_FLUSH = 0;
-+}
-+
-+// Frames per second of the last second, in the top right of the touch screen
-+static void VID_DrawFPS (void)
-+{
-+	static double	lasttime;
-+	static int		frames, totalframes;
-+	static char		text[16];
-+	char			log[48];
-+
-+	frames++;
-+	totalframes++;
-+	if (realtime - lasttime >= 1)
-+	{
-+		snprintf (text, sizeof(text), "%.0f fps", frames / (realtime - lasttime));
-+		if (vid_showfps.value > 1)
-+		{
-+			snprintf (log, sizeof(log), "FPS %d %.3f\n", totalframes, realtime);
-+			nocashMessage (log);
-+		}
-+		frames = 0;
-+		lasttime = realtime;
-+	}
-+	Draw_String (BASEWIDTH - 8 - strlen (text) * 8, 0, text);
-+}
-+
- void VID_Update (vrect_t *rects)
- {
--	int	page, y;
-+	int	y;
- 	u32	*src, *dst;
- 
-+	if (vid_showfps.value)
-+		VID_DrawFPS ();
-+
- 	if (smoothing != (vid_smooth.value != 0))
- 		VID_SetSmoothing (vid_smooth.value != 0);
- 
--	// Wait until the last flip happened, the back buffer is then free
--	while (pending_page >= 0)
--		threadWaitForVBlank ();
--
--	page = shown_page ^ 1;
--	src = (u32 *) vid.buffer;
--	dst = (u32 *) BG_BMP_RAM(page * 8);
--	for (y = 0; y < BASEHEIGHT; y++)
-+	src = (u32 *) (vid.buffer + copy_top * BASEWIDTH);
-+	dst = (u32 *) BG_BMP_RAM_SUB(0) + copy_top * FB_STRIDE / 4;
-+	for (y = copy_top; y < copy_bottom; y++)
- 	{
- 		memcpy (dst, src, BASEWIDTH);
- 		src += BASEWIDTH / 4;
- 		dst += FB_STRIDE / 4;
- 	}
--	pending_page = page;
-+
-+	olddrawn_top = min (olddrawn_top, drawn_top);
-+	olddrawn_bottom = max (olddrawn_bottom, drawn_bottom);
-+	copy_top = drawn_top = BASEHEIGHT;
-+	copy_bottom = drawn_bottom = 0;
- }
- 
- /*
+ //============================================================================

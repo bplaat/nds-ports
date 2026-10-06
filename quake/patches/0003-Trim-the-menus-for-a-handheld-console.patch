@@ -1,0 +1,413 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Tue, 6 Oct 2026 07:09:52 +0200
+Subject: [PATCH] Trim the menus for a handheld console
+
+The main menu has New Game, Load, Save, Options and Quit, one level
+instead of a Single Player menu, its items cut out of sp_menu.lmp and
+mainmenu.lmp: there is no network play and the help pages are about the
+keyboard. Options has Reset to defaults,
+Brightness, Sound Volume, Always Run and a Crosshair switch, without the
+console, which needs a keyboard, the key bindings, the mouse settings,
+screen size, CD music and video modes. Leaving the options writes
+config.cfg right away, not only on quitting: a handheld is often just
+switched off.
+---
+ WinQuake/menu.c     | 232 +++++++++++++++++---------------------------
+ WinQuake/quakedef.h |   1 +
+ 2 files changed, 91 insertions(+), 142 deletions(-)
+
+diff --git a/WinQuake/menu.c b/WinQuake/menu.c
+index a2fa76f..2dfa5d5 100644
+--- a/WinQuake/menu.c
++++ b/WinQuake/menu.c
+@@ -102,6 +102,8 @@ char		m_return_reason [32];
+ 
+ void M_ConfigureNetSubsystem(void);
+ 
++extern cvar_t	crosshair;
++
+ /*
+ ================
+ M_DrawCharacter
+@@ -274,6 +276,26 @@ void M_ToggleMenu_f (void)
+ int	m_main_cursor;
+ #define	MAIN_ITEMS	5
+ 
++// The single player items of sp_menu.lmp right in the main menu, then those
++// of mainmenu.lmp kept: there is no network play and the help is about the
++// keyboard
++static const struct
++{
++	char	*pic;
++	int		item;
++} m_main_items[MAIN_ITEMS] =
++{
++	{"gfx/sp_menu.lmp", 0},		// New Game
++	{"gfx/sp_menu.lmp", 1},		// Load
++	{"gfx/sp_menu.lmp", 2},		// Save
++	{"gfx/mainmenu.lmp", 2},	// Options
++	{"gfx/mainmenu.lmp", 4},	// Quit
++};
++#define	MAIN_ITEM_HEIGHT	20
++#define	MAIN_WIDTH			160		// the widest item, past it Quit's band has a bit of Help
++#define	MAIN_HEIGHT			(MAIN_ITEMS * MAIN_ITEM_HEIGHT + 12)
++#define	MAIN_Y				40		// under the title, lined up with it
++
+ 
+ void M_Menu_Main_f (void)
+ {
+@@ -288,6 +310,40 @@ void M_Menu_Main_f (void)
+ }
+ 
+ 
++/*
++================
++M_MainMenuPic
++
++The items of the menu cut out of sp_menu.lmp and mainmenu.lmp, the last
++one is taller
++================
++*/
++qpic_t *M_MainMenuPic (void)
++{
++	static qpic_t	*pic;
++	qpic_t			*src;
++	int				i, y, height;
++
++	if (pic)
++		return pic;
++	pic = malloc (sizeof(qpic_t) + MAIN_WIDTH * MAIN_HEIGHT);
++	pic->width = MAIN_WIDTH;
++	pic->height = MAIN_HEIGHT;
++	memset (pic->data, 255, MAIN_WIDTH * MAIN_HEIGHT);	// transparent
++	for (i = 0 ; i < MAIN_ITEMS ; i++)
++	{
++		src = Draw_CachePic (m_main_items[i].pic);
++		height = i < MAIN_ITEMS-1 ? MAIN_ITEM_HEIGHT : MAIN_HEIGHT - i * MAIN_ITEM_HEIGHT;
++		if (height > src->height - m_main_items[i].item * MAIN_ITEM_HEIGHT)
++			height = src->height - m_main_items[i].item * MAIN_ITEM_HEIGHT;
++		for (y = 0 ; y < height ; y++)
++			memcpy (pic->data + (i * MAIN_ITEM_HEIGHT + y) * MAIN_WIDTH,
++				src->data + (m_main_items[i].item * MAIN_ITEM_HEIGHT + y) * src->width,
++				src->width < MAIN_WIDTH ? src->width : MAIN_WIDTH);
++	}
++	return pic;
++}
++
+ void M_Main_Draw (void)
+ {
+ 	int		f;
+@@ -296,11 +352,11 @@ void M_Main_Draw (void)
+ 	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
+ 	p = Draw_CachePic ("gfx/ttl_main.lmp");
+-	M_DrawPic ( (320-p->width)/2, 4, p);
+-	M_DrawTransPic (72, 32, Draw_CachePic ("gfx/mainmenu.lmp") );
++	M_DrawPic (72, 4, p);
++	M_DrawTransPic (72, MAIN_Y, M_MainMenuPic ());
+ 
+ 	f = (int)(host_time * 10)%6;
+ 
+-	M_DrawTransPic (54, 32 + m_main_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
++	M_DrawTransPic (54, MAIN_Y + m_main_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
+ }
+ 
+ 
+@@ -334,19 +390,26 @@ void M_Main_Key (int key)
+ 		switch (m_main_cursor)
+ 		{
+ 		case 0:
+-			M_Menu_SinglePlayer_f ();
++			if (sv.active)
++				if (!SCR_ModalMessage("Are you sure you want to\nstart a new game?\n"))
++					break;
++			key_dest = key_game;
++			if (sv.active)
++				Cbuf_AddText ("disconnect\n");
++			Cbuf_AddText ("maxplayers 1\n");
++			Cbuf_AddText ("map start\n");
+ 			break;
+ 
+ 		case 1:
+-			M_Menu_MultiPlayer_f ();
++			M_Menu_Load_f ();
+ 			break;
+ 
+ 		case 2:
+-			M_Menu_Options_f ();
++			M_Menu_Save_f ();
+ 			break;
+ 
+ 		case 3:
+-			M_Menu_Help_f ();
++			M_Menu_Options_f ();
+ 			break;
+ 
+ 		case 4:
+@@ -532,7 +595,7 @@ void M_Load_Key (int k)
+ 	switch (k)
+ 	{
+ 	case K_ESCAPE:
+-		M_Menu_SinglePlayer_f ();
++		M_Menu_Main_f ();
+ 		break;
+ 
+ 	case K_ENTER:
+@@ -574,7 +637,7 @@ void M_Save_Key (int k)
+ 	switch (k)
+ 	{
+ 	case K_ESCAPE:
+-		M_Menu_SinglePlayer_f ();
++		M_Menu_Main_f ();
+ 		break;
+ 
+ 	case K_ENTER:
+@@ -1036,11 +1099,7 @@ again:
+ //=============================================================================
+ /* OPTIONS MENU */
+ 
+-#ifdef _WIN32
+-#define	OPTIONS_ITEMS	14
+-#else
+-#define	OPTIONS_ITEMS	13
+-#endif
++#define	OPTIONS_ITEMS	5
+ 
+ #define	SLIDER_RANGE	10
+ 
+@@ -1051,13 +1110,6 @@ void M_Menu_Options_f (void)
+ 	key_dest = key_menu;
+ 	m_state = m_options;
+ 	m_entersound = true;
+-
+-#ifdef _WIN32
+-	if ((options_cursor == 13) && (modestate != MS_WINDOWED))
+-	{
+-		options_cursor = 0;
+-	}
+-#endif
+ }
+ 
+ 
+@@ -1067,15 +1119,7 @@ void M_AdjustSliders (int dir)
+ 
+ 	switch (options_cursor)
+ 	{
+-	case 3:	// screen size
+-		scr_viewsize.value += dir * 10;
+-		if (scr_viewsize.value < 30)
+-			scr_viewsize.value = 30;
+-		if (scr_viewsize.value > 120)
+-			scr_viewsize.value = 120;
+-		Cvar_SetValue ("viewsize", scr_viewsize.value);
+-		break;
+-	case 4:	// gamma
++	case 1:	// gamma
+ 		v_gamma.value -= dir * 0.05;
+ 		if (v_gamma.value < 0.5)
+ 			v_gamma.value = 0.5;
+@@ -1083,27 +1127,7 @@ void M_AdjustSliders (int dir)
+ 			v_gamma.value = 1;
+ 		Cvar_SetValue ("gamma", v_gamma.value);
+ 		break;
+-	case 5:	// mouse speed
+-		sensitivity.value += dir * 0.5;
+-		if (sensitivity.value < 1)
+-			sensitivity.value = 1;
+-		if (sensitivity.value > 11)
+-			sensitivity.value = 11;
+-		Cvar_SetValue ("sensitivity", sensitivity.value);
+-		break;
+-	case 6:	// music volume
+-#ifdef _WIN32
+-		bgmvolume.value += dir * 1.0;
+-#else
+-		bgmvolume.value += dir * 0.1;
+-#endif
+-		if (bgmvolume.value < 0)
+-			bgmvolume.value = 0;
+-		if (bgmvolume.value > 1)
+-			bgmvolume.value = 1;
+-		Cvar_SetValue ("bgmvolume", bgmvolume.value);
+-		break;
+-	case 7:	// sfx volume
++	case 2:	// sfx volume
+ 		volume.value += dir * 0.1;
+ 		if (volume.value < 0)
+ 			volume.value = 0;
+@@ -1112,7 +1136,7 @@ void M_AdjustSliders (int dir)
+ 		Cvar_SetValue ("volume", volume.value);
+ 		break;
+ 
+-	case 8:	// allways run
++	case 3:	// allways run
+ 		if (cl_forwardspeed.value > 200)
+ 		{
+ 			Cvar_SetValue ("cl_forwardspeed", 200);
+@@ -1125,23 +1149,9 @@ void M_AdjustSliders (int dir)
+ 		}
+ 		break;
+ 
+-	case 9:	// invert mouse
+-		Cvar_SetValue ("m_pitch", -m_pitch.value);
++	case 4:	// crosshair
++		Cvar_SetValue ("crosshair", !crosshair.value);
+ 		break;
+-
+-	case 10:	// lookspring
+-		Cvar_SetValue ("lookspring", !lookspring.value);
+-		break;
+-
+-	case 11:	// lookstrafe
+-		Cvar_SetValue ("lookstrafe", !lookstrafe.value);
+-		break;
+-
+-#ifdef _WIN32
+-	case 13:	// _windowed_mouse
+-		Cvar_SetValue ("_windowed_mouse", !_windowed_mouse.value);
+-		break;
+-#endif
+ 	}
+ }
+ 
+@@ -1163,12 +1173,6 @@ void M_DrawSlider (int x, int y, float range)
+ 
+ void M_DrawCheckbox (int x, int y, int on)
+ {
+-#if 0
+-	if (on)
+-		M_DrawCharacter (x, y, 131);
+-	else
+-		M_DrawCharacter (x, y, 129);
+-#endif
+ 	if (on)
+ 		M_Print (x, y, "on");
+ 	else
+@@ -1184,52 +1188,21 @@ void M_Options_Draw (void)
+ 	p = Draw_CachePic ("gfx/p_option.lmp");
+ 	M_DrawPic ( (320-p->width)/2, 4, p);
+ 
+-	M_Print (16, 32, "    Customize controls");
+-	M_Print (16, 40, "         Go to console");
+-	M_Print (16, 48, "     Reset to defaults");
+-
+-	M_Print (16, 56, "           Screen size");
+-	r = (scr_viewsize.value - 30) / (120 - 30);
+-	M_DrawSlider (220, 56, r);
++	M_Print (16, 32, "     Reset to defaults");
+ 
+-	M_Print (16, 64, "            Brightness");
++	M_Print (16, 40, "            Brightness");
+ 	r = (1.0 - v_gamma.value) / 0.5;
+-	M_DrawSlider (220, 64, r);
+-
+-	M_Print (16, 72, "           Mouse Speed");
+-	r = (sensitivity.value - 1)/10;
+-	M_DrawSlider (220, 72, r);
++	M_DrawSlider (220, 40, r);
+ 
+-	M_Print (16, 80, "       CD Music Volume");
+-	r = bgmvolume.value;
+-	M_DrawSlider (220, 80, r);
+-
+-	M_Print (16, 88, "          Sound Volume");
++	M_Print (16, 48, "          Sound Volume");
+ 	r = volume.value;
+-	M_DrawSlider (220, 88, r);
+-
+-	M_Print (16, 96,  "            Always Run");
+-	M_DrawCheckbox (220, 96, cl_forwardspeed.value > 200);
++	M_DrawSlider (220, 48, r);
+ 
+-	M_Print (16, 104, "          Invert Mouse");
+-	M_DrawCheckbox (220, 104, m_pitch.value < 0);
++	M_Print (16, 56, "            Always Run");
++	M_DrawCheckbox (220, 56, cl_forwardspeed.value > 200);
+ 
+-	M_Print (16, 112, "            Lookspring");
+-	M_DrawCheckbox (220, 112, lookspring.value);
+-
+-	M_Print (16, 120, "            Lookstrafe");
+-	M_DrawCheckbox (220, 120, lookstrafe.value);
+-
+-	if (vid_menudrawfn)
+-		M_Print (16, 128, "         Video Options");
+-
+-#ifdef _WIN32
+-	if (modestate == MS_WINDOWED)
+-	{
+-		M_Print (16, 136, "             Use Mouse");
+-		M_DrawCheckbox (220, 136, _windowed_mouse.value);
+-	}
+-#endif
++	M_Print (16, 64, "             Crosshair");
++	M_DrawCheckbox (220, 64, crosshair.value);
+ 
+ // cursor
+ 	M_DrawCharacter (200, 32 + options_cursor*8, 12+((int)(realtime*4)&1));
+@@ -1241,6 +1214,9 @@ void M_Options_Key (int k)
+ 	switch (k)
+ 	{
+ 	case K_ESCAPE:
++		// the settings are kept right away, a handheld is often just
++		// switched off
++		Host_WriteConfiguration ();
+ 		M_Menu_Main_f ();
+ 		break;
+ 
+@@ -1249,18 +1225,8 @@ void M_Options_Key (int k)
+ 		switch (options_cursor)
+ 		{
+ 		case 0:
+-			M_Menu_Keys_f ();
+-			break;
+-		case 1:
+-			m_state = m_none;
+-			Con_ToggleConsole_f ();
+-			break;
+-		case 2:
+ 			Cbuf_AddText ("exec default.cfg\n");
+ 			break;
+-		case 12:
+-			M_Menu_Video_f ();
+-			break;
+ 		default:
+ 			M_AdjustSliders (1);
+ 			break;
+@@ -1289,24 +1255,6 @@ void M_Options_Key (int k)
+ 		M_AdjustSliders (1);
+ 		break;
+ 	}
+-
+-	if (options_cursor == 12 && vid_menudrawfn == NULL)
+-	{
+-		if (k == K_UPARROW)
+-			options_cursor = 11;
+-		else
+-			options_cursor = 0;
+-	}
+-
+-#ifdef _WIN32
+-	if ((options_cursor == 13) && (modestate != MS_WINDOWED))
+-	{
+-		if (k == K_UPARROW)
+-			options_cursor = 12;
+-		else
+-			options_cursor = 0;
+-	}
+-#endif
+ }
+ 
+ //=============================================================================
+diff --git a/WinQuake/quakedef.h b/WinQuake/quakedef.h
+index e451827..42cb2bf 100644
+--- a/WinQuake/quakedef.h
++++ b/WinQuake/quakedef.h
+@@ -308,6 +308,7 @@ void Host_ServerFrame (void);
+ void Host_InitCommands (void);
+ void Host_Init (quakeparms_t *parms);
+ void Host_Shutdown(void);
++void Host_WriteConfiguration (void);
+ void Host_Error (char *error, ...);
+ void Host_EndGame (char *message, ...);
+ void Host_Frame (float time);
