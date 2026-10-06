@@ -245,7 +245,7 @@ index 0000000..90ffdb1
 +4:	mov	r0, r3
 +	bx	lr
 diff --git a/WinQuake/mathlib.c b/WinQuake/mathlib.c
-index c70385b..c6b25d6 100644
+index aae774c..b3cc126 100644
 --- a/WinQuake/mathlib.c
 +++ b/WinQuake/mathlib.c
 @@ -186,7 +186,7 @@ BoxOnPlaneSide
@@ -311,10 +311,10 @@ index f735d50..deeb858 100644
  	int			r;
  	float		front, back, frac;
 diff --git a/WinQuake/r_part.c b/WinQuake/r_part.c
-index 529f757..e8a7a08 100644
+index 59842d8..a40bb74 100644
 --- a/WinQuake/r_part.c
 +++ b/WinQuake/r_part.c
-@@ -646,7 +646,7 @@ R_DrawParticles
+@@ -647,7 +647,7 @@ R_DrawParticles
  */
  extern	cvar_t	sv_gravity;
  

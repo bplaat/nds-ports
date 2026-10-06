@@ -1,0 +1,228 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Tue, 6 Oct 2026 19:00:00 +0200
+Subject: [PATCH] Leave scanf and the float printf out
+
+Doom prints no floats and reads only integers, so newlib's whole scanf,
+its float printf and their Unicode and decimal conversion code don't need
+to be in the ROM. The settings and command line numbers are read with
+strtoul, the settings file line by line, and the timedemo result is shown
+in thousandths. On the DS the integer-only printf, which libnds' console
+uses already, does all the formatting (stdio_nds.c), and a small siscanf
+reads the console's escape sequences, which only use %d.
+---
+ doomgeneric/g_game.c    |  8 ++--
+ doomgeneric/m_config.c  | 29 +++++++-------
+ doomgeneric/m_misc.c    | 10 +++--
+ doomgeneric/stdio_nds.c | 85 +++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 111 insertions(+), 21 deletions(-)
+ create mode 100644 doomgeneric/stdio_nds.c
+
+diff --git a/doomgeneric/g_game.c b/doomgeneric/g_game.c
+index 9954d78..7aaa53b 100644
+--- a/doomgeneric/g_game.c
++++ b/doomgeneric/g_game.c
+@@ -2251,19 +2251,19 @@ boolean G_CheckDemoStatus (void)
+ 	 
+     if (timingdemo) 
+     { 
+-        float fps;
++        int fps;    // in thousandths, without the C library's float printing
+         int realtics;
+ 
+ 	endtime = I_GetTime (); 
+         realtics = endtime - starttime;
+-        fps = ((float) gametic * TICRATE) / realtics;
++        fps = (long long) gametic * TICRATE * 1000 / realtics;
+ 
+         // Prevent recursive calls
+         timingdemo = false;
+         demoplayback = false;
+ 
+-	I_Error ("timed %i gametics in %i realtics (%f fps)",
+-                 gametic, realtics, fps);
++	I_Error ("timed %i gametics in %i realtics (%i.%03i fps)",
++                 gametic, realtics, fps / 1000, fps % 1000);
+     } 
+ 	 
+     if (demoplayback) 
+diff --git a/doomgeneric/m_config.c b/doomgeneric/m_config.c
+index 91bfb55..9636040 100644
+--- a/doomgeneric/m_config.c
++++ b/doomgeneric/m_config.c
+@@ -1717,14 +1717,8 @@ static void SaveDefaultCollection(default_collection_t *collection)
+ 
+ static int ParseIntParameter(char *strparm)
+ {
+-    int parm;
+-
+-    if (strparm[0] == '0' && strparm[1] == 'x')
+-        sscanf(strparm+2, "%x", &parm);
+-    else
+-        sscanf(strparm, "%i", &parm);
+-
+-    return parm;
++    // decimal, or hexadecimal after 0x, wrapping around like scanf's %x
++    return strtoul(strparm, NULL, 0);
+ }
+ 
+ // Parses float values in the configuration file, without the C library's
+@@ -1803,8 +1797,8 @@ static void LoadDefaultCollection(default_collection_t *collection)
+ {
+     FILE *f;
+     default_t *def;
+-    char defname[80];
+-    char strparm[100];
++    char line[256];
++    char *defname, *strparm;
+ 
+     // read the file in, overriding any set defaults
+     f = fopen(collection->filename, "r");
+@@ -1817,15 +1811,24 @@ static void LoadDefaultCollection(default_collection_t *collection)
+         return;
+     }
+ 
+-    while (!feof(f))
++    while (fgets(line, sizeof(line), f) != NULL)
+     {
+-        if (fscanf(f, "%79s %99[^\n]\n", defname, strparm) != 2)
++        // A name, then the rest of the line is the value
++
++        defname = line + strspn(line, " \t");
++        strparm = defname + strcspn(defname, " \t\r\n");
++
++        if (*strparm != ' ' && *strparm != '\t')
+         {
+             // This line doesn't match
+ 
+             continue;
+         }
+ 
++        *strparm++ = '\0';
++        strparm += strspn(strparm, " \t");
++        strparm[strcspn(strparm, "\n")] = '\0';
++
+         // Find the setting in the list
+ 
+         def = SearchCollection(collection, defname);
+@@ -1851,7 +1854,7 @@ static void LoadDefaultCollection(default_collection_t *collection)
+          && strparm[0] == '"' && strparm[strlen(strparm) - 1] == '"')
+         {
+             strparm[strlen(strparm) - 1] = '\0';
+-            memmove(strparm, strparm + 1, sizeof(strparm) - 1);
++            ++strparm;
+         }
+ 
+         SetVariable(def, strparm);
+diff --git a/doomgeneric/m_misc.c b/doomgeneric/m_misc.c
+index 54b2613..2542520 100644
+--- a/doomgeneric/m_misc.c
++++ b/doomgeneric/m_misc.c
+@@ -189,10 +189,12 @@ char *M_TempFile(char *s)
+ 
+ boolean M_StrToInt(const char *str, int *result)
+ {
+-    return sscanf(str, " 0x%x", result) == 1
+-        || sscanf(str, " 0X%x", result) == 1
+-        || sscanf(str, " 0%o", result) == 1
+-        || sscanf(str, " %d", result) == 1;
++    char *end;
++
++    // decimal, hexadecimal after 0x or octal after 0, wrapping around like
++    // scanf's %x and %o
++    *result = strtoul(str, &end, 0);
++    return end != str;
+ }
+ 
+ void M_ExtractFileBase(char *path, char *dest)
+diff --git a/doomgeneric/stdio_nds.c b/doomgeneric/stdio_nds.c
+new file mode 100644
+index 0000000..7104686
+--- /dev/null
++++ b/doomgeneric/stdio_nds.c
+@@ -0,0 +1,85 @@
++//
++// printf and siscanf for the ARM9
++//
++// Doom prints no floats, so newlib's integer-only printf, which libnds'
++// console uses already, does all the formatting: the float one, with its
++// decimal conversion and locale code, is left out of the ROM. The console
++// reads its escape sequences with siscanf, using only %d, which a few lines
++// do instead of newlib's whole scanf with its Unicode tables.
++//
++
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++int vfprintf(FILE *stream, const char *format, va_list ap)
++{
++    return vfiprintf(stream, format, ap);
++}
++
++int fprintf(FILE *stream, const char *format, ...)
++{
++    va_list ap;
++    int n;
++
++    va_start(ap, format);
++    n = vfiprintf(stream, format, ap);
++    va_end(ap);
++    return n;
++}
++
++int printf(const char *format, ...)
++{
++    va_list ap;
++    int n;
++
++    va_start(ap, format);
++    n = viprintf(format, ap);
++    va_end(ap);
++    return n;
++}
++
++int vsnprintf(char *str, size_t size, const char *format, va_list ap)
++{
++    return vsniprintf(str, size, format, ap);
++}
++
++int snprintf(char *str, size_t size, const char *format, ...)
++{
++    va_list ap;
++    int n;
++
++    va_start(ap, format);
++    n = vsniprintf(str, size, format, ap);
++    va_end(ap);
++    return n;
++}
++
++int siscanf(const char *str, const char *format, ...)
++{
++    va_list ap;
++    int n = 0;
++
++    va_start(ap, format);
++    for (; *format; ++format)
++    {
++        if (format[0] == '%' && format[1] == 'd')
++        {
++            char *end;
++            int value = strtol(str, &end, 10);
++
++            if (end == str)
++                break;
++            *va_arg(ap, int *) = value;
++            str = end;
++            ++format;
++            ++n;
++        }
++        else if (*str++ != *format)
++        {
++            break;
++        }
++    }
++    va_end(ap);
++    return n;
++}

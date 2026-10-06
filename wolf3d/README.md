@@ -71,7 +71,7 @@ supported.
 
 With an SD card the config and savegames go to `/data/wolf3d/`. Without one
 you can still play, saving then shows a message instead. Wolf4SDL's command
-line options such as `--goobers` or `--tedlevel 3 --hard` can be put in
+line options such as `--tedlevel 3 --hard` can be put in
 `/data/wolf3d/args.txt`.
 
 ## Screenshot
@@ -155,7 +155,9 @@ it uses, in `nds/`, so its own code is barely changed.
   builds the `.nds` with devkitARM and libnds/calico, with the Apogee v1.4
   graphics layout. The ray caster, the scaler, the fixed point math and
   `memcpy`/`memset` run from ITCM as ARM code, the rest is Thumb code in
-  main RAM.
+  main RAM, the cold parts optimized for size. `printf` and its kin are
+  newlib's integer-only versions and the Tab debug keys, which need a
+  keyboard, are left out.
 - [0014](patches/0014-Add-the-DS-startup.patch): `wl_nds.c` switches the
   ARM9 to 134 MHz in DSi mode, finds the game data in NitroFS and on the SD
   card, keeps config and saves in `/data/wolf3d/` and reads `args.txt`.
@@ -163,7 +165,9 @@ it uses, in `nds/`, so its own code is barely changed.
   the game it loads, the full game or the shareware. As
   soon as the data is found, it shows the title on the top screen while the
   game loads, expanding only its chunk of the graphics. Errors are shown on
-  the touch screen.
+  the touch screen. A small `siscanf` for the console's escape codes and
+  console printing through the string formatter keep newlib's scanf and
+  second printf engine out of the ROM.
 - [0015](patches/0015-Add-the-SDL-core-on-the-DS.patch): `sdl.c` and the
   SDL headers: initialization, time and message boxes.
 - [0016](patches/0016-Add-DS-video.patch): `sdl_video.c` page flips two
@@ -199,5 +203,7 @@ it uses, in `nds/`, so its own code is barely changed.
   newlib's `memcpy` and `memset`, which copy a byte at a time in Thumb mode,
   with word copies from ITCM.
 - [0022](patches/0022-Use-single-precision-and-reduce-floating-point-work.patch):
-  Use single-precision trig, projection and AdLib tables; share the
-  direction-to-angle conversion and replace its division with multiplication.
+  Use single-precision trig, projection and AdLib tables (without `powf`);
+  share the direction-to-angle conversion and replace its division with
+  multiplication. Sprite rotation and the audio buffer size are worked out in
+  integers, no double math is left.

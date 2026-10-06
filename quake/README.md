@@ -26,7 +26,8 @@ it, the one in your hands in a yellow frame. Tap a weapon to select it. When
 you die, or hold SELECT, the map makes way for the kills, secrets and time.
 
 The game starts in the main menu, which is on the top screen over the demos.
-The main menu has New Game, Load, Save, Options and Quit. Options has Reset to
+The main menu has New Game, Load, Save, Options and Quit, which in a game ends
+it and goes back to the main menu, like End Game in DOOM. Options has Reset to
 defaults, Brightness, Sound Volume, Always Run and Crosshair. While a menu is
 open the touch screen keeps showing the game, with the options and while no
 game runs it shows the controls, centered on the console background. While
@@ -96,12 +97,13 @@ written for the DS only, without `__NDS__` checks.
 - [0003](patches/0003-Trim-the-menus-for-a-handheld-console.patch): The
   main menu has New Game, Load, Save, Options and Quit on one level, cut out
   of the single player and main menu pictures, there is no network play and
-  the help is about the keyboard. Options lose the
-  console, the key bindings, the mouse settings, screen size, CD music and
-  video modes, and get a Crosshair switch. Leaving them writes `config.cfg`
+  the help is about the keyboard, the network menus are left out. Options
+  lose the console, the key bindings, the mouse settings, screen size, CD
+  music and video modes, and get a Crosshair switch. Leaving them writes `config.cfg`
   right away, not only on quitting.
 - [0004](patches/0004-Start-in-the-main-menu.patch): The demo loop starts
-  with the main menu open, the demos keep playing behind it.
+  with the main menu open, the demos keep playing behind it. In a game Quit
+  ends it, back to the main menu over the demos.
 - [0005](patches/0005-Put-the-messages-and-center-prints-on-the-top-screen.patch):
   The notify lines and center prints are text on the top screen
   (`vid_textlayer`), over the view, 32 columns wide, a long notify line goes
@@ -117,7 +119,8 @@ written for the DS only, without `__NDS__` checks.
 - [0008](patches/0008-Show-a-loading-screen.patch): The loading plaque
   shows on the top screen whenever a level loads, also for a game started
   from the menu, instead of the frozen screen and then the console. A
-  level, savegame or demo that can't be loaded ends it again.
+  level, savegame or demo that can't be loaded ends it again, and a
+  savegame loaded from the console no longer stops Quake.
 - [0009](patches/0009-Show-savegame-slots-instead-of-paths.patch): Saving
   and loading name the slot, eg. "Game saved in slot 1", instead of the path
   of the file.
@@ -158,8 +161,10 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   server, its physics and QuakeC, runs at 20 Hz instead of every frame, the
   client interpolates the entities in between. A short button press between
   two server frames still counts.
-- [0015](patches/0015-Use-single-precision-sine-and-cosine.patch):
-  `AngleVectors` uses the float sine and cosine, a lot cheaper in software.
+- [0015](patches/0015-Use-single-precision-math.patch): The float
+  versions of `sqrt`, `sin`, `cos`, the arc tangents, `floor`, `ceil` and
+  `pow` are used everywhere, a lot cheaper in software, and the particles
+  are compared with the client time in single precision.
 - [0016](patches/0016-Work-out-the-sound-positions-in-integers.patch):
   `SND_Spatialize` works in integers with the DS square root and divider
   units.
@@ -174,10 +179,15 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
 - [0019](patches/0019-Leave-freed-hunk-memory-as-it-is.patch): Freed hunk
   memory isn't cleared, allocations clear their own, which saves clearing
   every temporary file buffer while a level loads.
+- [0020](patches/0020-Parse-text-without-scanf-and-strtod.patch):
+  Savegames, their comments for the menu and point files are read a word at
+  a time (`COM_ReadWord`) and numbers with `Q_atof`, so newlib's `fscanf`
+  and `strtod`, with their wide character tables, aren't linked. The code
+  is in RAM on the DS, this leaves 30 KiB more for the game.
 
 ### The DS platform
 
-- [0020](patches/0020-Add-a-Nintendo-DS-build.patch): `Makefile.nds`
+- [0021](patches/0021-Add-a-Nintendo-DS-build.patch): `Makefile.nds`
   builds a DSi enhanced `.nds` with devkitARM and libnds/calico. The
   collision code, `memcpy`/`memset` and libgcc's software floating point,
   taken out of libgcc, run from ITCM as ARM code, `HOT_CODE` puts single
@@ -186,7 +196,7 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   calls and five saved registers of libgcc's, which made a fifth of the
   time in fights. Constants are single precision, so they don't drag
   expressions to double.
-- [0021](patches/0021-Add-the-DS-system-layer.patch): `sys_nds.c` switches
+- [0022](patches/0022-Add-the-DS-system-layer.patch): `sys_nds.c` switches
   the ARM9 to 134 MHz in DSi mode, runs Quake in a thread with its stack in
   main RAM (Quake keeps arrays of up to 32 KiB on the stack, the ARM9 stack
   is in the 16 KiB DTCM), gives the hunk all RAM that is left, reads
@@ -194,8 +204,11 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   full game, mission pack or mod) with loading dots and errors on the
   touch screen. The game data in the ROM
   is searched before the SD card, which gets the written files. The player is
-  named after the user of the DS settings.
-- [0022](patches/0022-Add-the-DS-3D-renderer.patch): `r_nds.c` draws the
+  named after the user of the DS settings. `fprintf`, `printf` and libnds'
+  console format with `vsnprintf`, a short `siscanf` reads the console's
+  escape sequences, so newlib's formatters for files and integers and its
+  scanf aren't linked, nor libgcc's stack unwinder.
+- [0023](patches/0023-Add-the-DS-3D-renderer.patch): `r_nds.c` draws the
   world, brush and alias models, sprites and particles with the geometry
   engine. Vertices are 16-bit fixed point world coordinates and surfaces are
   quad strips zig-zagging across their polygons. Textures stay 8-bit in VRAM
@@ -214,14 +227,15 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   is a third so it doesn't poke into walls, the crosshair is a pixel-exact 7
   by 7 cross.
   Alias models are joined into triangle strips of 10-bit vertices, placed
-  relative to the eye so they don't wobble. The surfaces' hardware data is
+  relative to the eye so they don't wobble, their shading is a table in 8.8
+  fixed point. The surfaces' hardware data is
   packed without pointers and the temporary memory is freed after a load,
   so the cache has room for every shareware level's models and sounds. The world traversal, culling,
   lighting, alias models and particles run from ITCM. The world's vertex
   colors are worked out while the hardware still waits to show the last
   frame. A level reads each alias model's file once, for its skins and the
   model.
-- [0023](patches/0023-Add-DS-video.patch): `vid_nds.c` shows the 3D view
+- [0024](patches/0024-Add-DS-video.patch): `vid_nds.c` shows the 3D view
   on the top screen with a text layer over it, Quake's font and the loading
   plaque as tiles. Edge marking fills the polygon edges. The touch screen shows the
   320x200 2D drawing scaled by the affine background hardware, smoothed by a
@@ -231,10 +245,10 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   when drawn again: it's cut into tiles for the same layers on the top
   screen, scrolled to the middle, only the tiles with something on them take
   VRAM and only the ones that changed are copied.
-- [0024](patches/0024-Add-DS-buttons.patch): `in_nds.c` maps the buttons
+- [0025](patches/0025-Add-DS-buttons.patch): `in_nds.c` maps the buttons
   to Quake's keys and taps to the weapons and handles the lid and power
   button.
-- [0025](patches/0025-Add-the-DS-touch-screen.patch): `sbar_nds.c` draws
+- [0026](patches/0026-Add-the-DS-touch-screen.patch): `sbar_nds.c` draws
   the map, stats and weapon cells below the status bar with Quake's own
   graphics, redrawn only where they changed. The weapons are drawn from their
   models when the game starts, textured and lit. The map is a line for each
@@ -243,7 +257,7 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   time in the intermission's big numbers instead. With the options and while
   no game runs behind the menu it shows the controls in a dark inset in the
   middle of the console background. When you die the time stops.
-- [0026](patches/0026-Add-DS-sound.patch): `snd_nds.c` plays every sound
+- [0027](patches/0027-Add-DS-sound.patch): `snd_nds.c` plays every sound
   channel on a hardware channel of its own, which does the resampling,
   volume and stereo panning, instead of mixing them in software: the
   ambient and entity sounds on channels 0-11, the four loudest static
@@ -251,6 +265,6 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   not with the level, and only the sounds that play stay in the cache, the
   ambient ones only near water or sky, so the models aren't pushed out of
   it.
-- [0027](patches/0027-Copy-memory-fast-on-the-DS.patch): `mem_nds.c`
+- [0028](patches/0028-Copy-memory-fast-on-the-DS.patch): `mem_nds.c`
   replaces newlib's `memcpy` and `memset`, which copy a byte at a time in
   Thumb mode, with word copies from ITCM.

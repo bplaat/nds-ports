@@ -5,11 +5,12 @@ Subject: [PATCH] Start in the main menu
 
 The demo loop starts with the main menu open, and the menu no longer
 stops the demos, they keep playing behind it. B (escape) leaves the main
-menu back to the demos.
+menu back to the demos. In a game Quit ends it after asking, back to the
+main menu over the demos, like End Game in DOOM and Wolf3D.
 ---
  WinQuake/host_cmd.c |  3 +++
- WinQuake/menu.c     | 11 +----------
- 2 files changed, 4 insertions(+), 10 deletions(-)
+ WinQuake/menu.c     | 21 +++++++++++----------
+ 2 files changed, 14 insertions(+), 10 deletions(-)
 
 diff --git a/WinQuake/host_cmd.c b/WinQuake/host_cmd.c
 index e658cd4..fe2c19f 100644
@@ -33,10 +34,10 @@ index e658cd4..fe2c19f 100644
  	else
  		cls.demonum = -1;
 diff --git a/WinQuake/menu.c b/WinQuake/menu.c
-index 2dfa5d5..82a1391 100644
+index 74c584f..e2929f8 100644
 --- a/WinQuake/menu.c
 +++ b/WinQuake/menu.c
-@@ -237,8 +237,6 @@ void M_DrawTextBox (int x, int y, int width, int lines)
+@@ -163,8 +163,6 @@ void M_DrawTextBox (int x, int y, int width, int lines)
  
  //=============================================================================
  
@@ -45,7 +46,7 @@ index 2dfa5d5..82a1391 100644
  /*
  ================
  M_ToggleMenu_f
-@@ -299,11 +297,7 @@ static const struct
+@@ -225,11 +223,7 @@ static const struct
  
  void M_Menu_Main_f (void)
  {
@@ -58,7 +59,7 @@ index 2dfa5d5..82a1391 100644
  	key_dest = key_menu;
  	m_state = m_main;
  	m_entersound = true;
-@@ -367,9 +361,6 @@ void M_Main_Key (int key)
+@@ -293,9 +287,6 @@ void M_Main_Key (int key)
  	case K_ESCAPE:
  		key_dest = key_game;
  		m_state = m_none;
@@ -68,3 +69,20 @@ index 2dfa5d5..82a1391 100644
  		break;
  
  	case K_DOWNARROW:
+@@ -339,6 +330,16 @@ void M_Main_Key (int key)
+ 			break;
+ 
+ 		case 4:
++			// in a game Quit ends it, back to the main menu over the demos
++			if (sv.active)
++			{
++				if (SCR_ModalMessage("Are you sure you want to\nend the game?\n"))
++				{
++					Cbuf_AddText ("demos\n");
++					m_main_cursor = 0;
++				}
++				break;
++			}
+ 			M_Menu_Quit_f ();
+ 			break;
+ 		}

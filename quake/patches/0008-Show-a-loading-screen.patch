@@ -11,13 +11,15 @@ the touch screen is black, until the level is ready. While the demos
 change behind the menu, the menu stays. A level, savegame or demo that
 can't be loaded ends it again, it no longer waits for a level, and the
 demo loop only shows it when there is a demo to play. The status bar
-isn't drawn while a level loads.
+isn't drawn while a level loads. The view behind the plaque is only drawn
+while there is a level: a savegame loaded from the console draws it after
+the old level is gone.
 ---
  WinQuake/cl_demo.c  |  1 +
  WinQuake/cl_main.c  |  5 +++--
  WinQuake/host_cmd.c |  7 ++++++-
- WinQuake/screen.c   | 20 +++++++-------------
- 4 files changed, 17 insertions(+), 16 deletions(-)
+ WinQuake/screen.c   | 25 +++++++++++--------------
+ 4 files changed, 21 insertions(+), 17 deletions(-)
 
 diff --git a/WinQuake/cl_demo.c b/WinQuake/cl_demo.c
 index 550368e..bd5aeaa 100644
@@ -95,7 +97,7 @@ index fe2c19f..cd09f80 100644
  	}
  	sv.paused = true;		// pause until all clients connect
 diff --git a/WinQuake/screen.c b/WinQuake/screen.c
-index 8b1c6dc..93bb91c 100644
+index 8b1c6dc..1b150fd 100644
 --- a/WinQuake/screen.c
 +++ b/WinQuake/screen.c
 @@ -462,14 +462,13 @@ SCR_DrawLoading
@@ -118,7 +120,23 @@ index 8b1c6dc..93bb91c 100644
  }
  
  
-@@ -703,12 +702,8 @@ void SCR_BeginLoadingPlaque (void)
+@@ -486,11 +485,14 @@ void SCR_SetUpToDrawConsole (void)
+ {
+ 	Con_CheckResize ();
+ 	
++// also with the loading plaque, which a load from the console draws after
++// the old map is gone
++	con_forcedup = !cl.worldmodel || cls.signon != SIGNONS;
++
+ 	if (scr_drawloading)
+ 		return;		// never a console with loading plaque
+ 		
+ // decide on the height of the console
+-	con_forcedup = !cl.worldmodel || cls.signon != SIGNONS;
+ 
+ 	if (con_forcedup)
+ 	{
+@@ -703,12 +705,8 @@ void SCR_BeginLoadingPlaque (void)
  {
  	S_StopAllSounds (true);
  
@@ -133,7 +151,7 @@ index 8b1c6dc..93bb91c 100644
  	Con_ClearNotify ();
  	scr_centertime_off = 0;
  	scr_con_current = 0;
-@@ -953,7 +948,6 @@ void SCR_UpdateScreen (void)
+@@ -953,7 +951,6 @@ void SCR_UpdateScreen (void)
  	else if (scr_drawloading)
  	{
  		SCR_DrawLoading ();

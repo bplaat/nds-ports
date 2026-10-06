@@ -33,16 +33,16 @@ when it changes.
  WinQuake/model.h    |   6 +
  WinQuake/sbar.c     |  15 +-
  WinQuake/sbar.h     |   8 +
- WinQuake/sbar_nds.c | 943 ++++++++++++++++++++++++++++++++++++++++++++
+ WinQuake/sbar_nds.c | 940 ++++++++++++++++++++++++++++++++++++++++++++
  WinQuake/screen.c   |   2 +
- 8 files changed, 973 insertions(+), 9 deletions(-)
+ 8 files changed, 970 insertions(+), 9 deletions(-)
  create mode 100644 WinQuake/sbar_nds.c
 
 diff --git a/WinQuake/menu.c b/WinQuake/menu.c
-index 91efe2c..8acb925 100644
+index 9a72ecc..abb4e56 100644
 --- a/WinQuake/menu.c
 +++ b/WinQuake/menu.c
-@@ -2989,6 +2989,12 @@ void M_Init (void)
+@@ -1212,6 +1212,12 @@ void M_Init (void)
  }
  
  
@@ -159,10 +159,10 @@ index 0d163c2..2268be3 100644
 +// the key of the weapon at a 2D position, 0 for none
 diff --git a/WinQuake/sbar_nds.c b/WinQuake/sbar_nds.c
 new file mode 100644
-index 0000000..33e1df3
+index 0000000..873e31a
 --- /dev/null
 +++ b/WinQuake/sbar_nds.c
-@@ -0,0 +1,943 @@
+@@ -0,0 +1,940 @@
 +/*
 +Copyright (C) 1996-1997 Id Software, Inc.
 +
@@ -280,10 +280,7 @@ index 0000000..33e1df3
 +
 +static weaponpic_t	weaponpics[NUM_CELLS];
 +
-+static const float	vertexnormals[][3] =
-+{
-+#include "anorms.h"
-+};
++extern float	r_avertexnormals[][3];		// r_nds.c
 +
 +extern qboolean	scr_drawloading;
 +extern qpic_t	*sb_items[32];
@@ -657,7 +654,7 @@ index 0000000..33e1df3
 +		for (j = 0; j < 3; j++)
 +		{
 +			k = verts[tris[i].vertindex[j]].lightnormalindex;
-+			a += DotProduct (vertexnormals[k], light);
++			a += DotProduct (r_avertexnormals[k], light);
 +		}
 +		shade = 14 - (int) (a / 3 * 18);
 +		rows = host_colormap + bound (8, shade, 56) * 256;
@@ -1107,10 +1104,10 @@ index 0000000..33e1df3
 +	return i < NUM_CELLS ? cells[i].key : 0;
 +}
 diff --git a/WinQuake/screen.c b/WinQuake/screen.c
-index 51b136e..a92f5e7 100644
+index 97f489e..e7f057d 100644
 --- a/WinQuake/screen.c
 +++ b/WinQuake/screen.c
-@@ -936,6 +936,7 @@ void SCR_UpdateScreen (void)
+@@ -939,6 +939,7 @@ void SCR_UpdateScreen (void)
  
  	if (scr_drawdialog)
  	{
@@ -1118,7 +1115,7 @@ index 51b136e..a92f5e7 100644
  		// on the top screen like the menu
  		VID_BeginMenu ();
  		SCR_DrawNotifyString ();
-@@ -967,6 +968,7 @@ void SCR_UpdateScreen (void)
+@@ -970,6 +971,7 @@ void SCR_UpdateScreen (void)
  		SCR_DrawTurtle ();
  		SCR_DrawPause ();
  		SCR_CheckDrawCenterString ();

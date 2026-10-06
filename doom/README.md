@@ -114,7 +114,8 @@ code is written for the DS only, without `__NDS__` checks.
   slots.
 - [0010](patches/0010-Keep-the-settings-in-default.cfg.patch): The config
   files, which doomgeneric never read or wrote, keep the settings again,
-  written whenever the menu closes.
+  written whenever the menu closes. The DS buttons' fire, use and strafe
+  keys, which have no PC scancode, are read back as written.
 
 ### Rendering
 
@@ -212,5 +213,22 @@ of main RAM on a 16-bit bus at half its clock.
   replaces newlib's `memcpy` and `memset`, which copy a byte at a time in
   Thumb mode, with word copies from ITCM.
 - [0032](patches/0032-Use-single-precision-and-reduce-floating-point-work.patch):
-  Use single-precision configuration parsing and mouse math; reuse sine
-  samples across music harmonics and normalize with one division per wave.
+  Float settings are read and written in thousandths without the C
+  library's float code, the mouse math is single precision, and the music
+  reuses sine samples across harmonics and normalizes with one division per
+  wave.
+- [0033](patches/0033-Leave-scanf-and-the-float-printf-out.patch): Numbers
+  are read with `strtoul` and the settings file line by line, the timedemo
+  result is shown in thousandths; `stdio_nds.c` sends all printing to
+  newlib's integer-only printf and reads libnds' console escapes with a
+  small `siscanf`, so scanf, the float printf and their Unicode tables are
+  out of the ROM (72 KiB).
+- [0034](patches/0034-Skip-the-WAD-checksum-only-netgames-use.patch): The
+  WAD directory's SHA-1, only used by the network client that isn't built,
+  isn't worked out at startup.
+- [0035](patches/0035-Build-the-trig-tables-at-startup.patch): `finesine`,
+  `finetangent` and `tantoangle` are built at startup from a quarter, a
+  half and the shrinking steps, the same to the bit (demos stay in sync),
+  51 KiB less ROM for 14 KiB more RAM.
+- [0036](patches/0036-Pack-the-states-into-20-bytes.patch): `state_t`
+  uses shorts for its small fields, 20 bytes a state instead of 28.

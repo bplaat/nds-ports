@@ -9,14 +9,19 @@ through NitroFS and ICON as the icon. The ray caster, the scaler, the
 fixed point math and memcpy/memset run from ITCM as ARM code, the rest
 is Thumb code in main RAM. Enums keep the size of an int, savegames hold
 structs with them. The signon screen isn't shown, so its 64 KiB picture
-isn't built in. The screen is the 320x200 frame of 8 bits, newlib has no
-sys/uio.h.
+isn't built in, and the Tab debug keys are left out, there is no keyboard
+to press them. Nothing prints a float, so printf and its kin are newlib's
+integer-only versions, which leave its floating point formatting out.
+The cold code (startup, config and savegames, the menus, the
+intermission and the help texts) is optimized for size. The screen is
+the 320x200 frame of 8 bits, newlib has no sys/uio.h.
 ---
  .gitignore   |  4 +++
- Makefile.nds | 79 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ Makefile.nds | 87 ++++++++++++++++++++++++++++++++++++++++++++++++++++
  id_ca.c      |  3 +-
  id_vl.c      |  6 ++--
- 4 files changed, 87 insertions(+), 5 deletions(-)
+ version.h    |  2 +-
+ 5 files changed, 96 insertions(+), 6 deletions(-)
  create mode 100644 Makefile.nds
 
 diff --git a/.gitignore b/.gitignore
@@ -33,10 +38,10 @@ index ed406f8..74e32b2 100644
 +/wolf3d.lst
 diff --git a/Makefile.nds b/Makefile.nds
 new file mode 100644
-index 0000000..da66380
+index 0000000..ad4ba6e
 --- /dev/null
 +++ b/Makefile.nds
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,87 @@
 +#---------------------------------------------------------------------------------
 +# Nintendo DS (devkitARM + libnds) build of Wolf4SDL
 +#   make -f Makefile.nds [ICON=icon.bmp] [NITRO_DIR=dir]
@@ -73,6 +78,10 @@ index 0000000..da66380
 +# memset) runs from ITCM
 +SRC_ITCM := wl_draw wl_scale wl_utils nds/mem
 +
++# Cold code (startup, config and savegames, the menus, the intermission and
++# the help texts) is optimized for size
++SRC_COLD := wl_inter wl_main wl_menu wl_text
++
 +OFILES := $(addprefix $(BUILD)/,$(addsuffix .o,$(SRC_WOLF)) $(addsuffix .itcm.o,$(SRC_ITCM)))
 +
 +ARCH     := -march=armv5te -mtune=arm946e-s -mthumb
@@ -85,6 +94,9 @@ index 0000000..da66380
 +	-ffunction-sections -fdata-sections -fno-strict-aliasing -fno-short-enums -std=gnu99 \
 +	$(ARCH) -DARM9 -DVERSIONALREADYCHOSEN -DCARMACIZED \
 +	-Inds -I. -I$(LIBNDS)/include -I$(CALICO)/include
++# Nothing prints a float, newlib's integer-only printf functions leave its
++# floating point formatting out
++CFLAGS   += -Dprintf=iprintf -Dsprintf=siprintf -Dsnprintf=sniprintf -Dvsnprintf=vsniprintf
 +LDFLAGS  := -specs=ds_arm9.specs -g $(ARCH) -Wl,--no-enum-size-warning -Wl,-Map,$(BUILD)/$(TARGET).map
 +LIBS     := -lfilesystem -lfat -lnds9 -lm
 +LD       := $(CC)
@@ -101,6 +113,7 @@ index 0000000..da66380
 +$(OUTPUT).elf: $(OFILES)
 +
 +$(BUILD)/%.itcm.o: CFLAGS += -marm -mlong-calls
++$(addprefix $(BUILD)/,$(addsuffix .o,$(SRC_COLD))): CFLAGS += -Os
 +$(BUILD)/nds/mem.itcm.o: CFLAGS += -fno-builtin -fno-tree-loop-distribute-patterns
 +$(BUILD)/%.itcm.o: %.c
 +	$(SILENTMSG) $(notdir $<)
@@ -147,3 +160,16 @@ index 9c3c9a3..ca55f61 100644
  #endif
  
  SDL_Surface *screen = NULL;
+diff --git a/version.h b/version.h
+index 791e595..cac05b7 100644
+--- a/version.h
++++ b/version.h
+@@ -48,7 +48,7 @@
+ //#define VIEWMAP             // Enables the overhead map
+ //#define REVEALMAP           // Enables showing only the areas of the overhead map that have been seen
+ 
+-#define DEBUGKEYS             // Comment this out to compile without the Tab debug keys
++//#define DEBUGKEYS           // Comment this out to compile without the Tab debug keys
+ #define ARTSEXTERN
+ #define DEMOSEXTERN
+ #define PLAYDEMOLIKEORIGINAL  // When playing or recording demos, several bug fixes do not take
