@@ -60,18 +60,62 @@ particles on the top screen.
   is only worked out again when the field of view changes.
 - The world is traversed in fixed point with frustum clip flags, it and
   the culling, surface lighting, alias models and particles run from
-  ITCM as ARM code.
+  ITCM as ARM code. The vertex colors of the world's surfaces are worked
+  out before any of them goes to the hardware, which takes no more than
+  a FIFO full of commands until it showed the last frame, so this work
+  fills that wait. They are in VRAM bank H and the skins and sprite
+  frames a map loads are listed in bank I, both otherwise unused, as
+  the RAM is short.
+- When a map loads, the file of each alias model is read once: its skins
+  are uploaded from it and the model is loaded from it, of a model still
+  in the cache only the part up to its triangles is read.
 ---
- WinQuake/model.h   |   12 +-
+ WinQuake/model.c   |   17 +
+ WinQuake/model.h   |   13 +-
  WinQuake/r_light.c |   36 +-
- WinQuake/r_nds.c   | 2669 ++++++++++++++++++++++++++++++++++++++++++++
+ WinQuake/r_nds.c   | 2812 ++++++++++++++++++++++++++++++++++++++++++++
  WinQuake/vid.h     |    3 +
  WinQuake/view.c    |    7 -
- 5 files changed, 2687 insertions(+), 40 deletions(-)
+ 6 files changed, 2848 insertions(+), 40 deletions(-)
  create mode 100644 WinQuake/r_nds.c
 
+diff --git a/WinQuake/model.c b/WinQuake/model.c
+index 104c15b..14c3b21 100644
+--- a/WinQuake/model.c
++++ b/WinQuake/model.c
+@@ -177,6 +177,7 @@ void Mod_ClearAll (void)
+ 
+ 	for (i=0 , mod=mod_known ; i<mod_numknown ; i++, mod++) {
+ 		mod->needload = NL_UNREFERENCED;
++		mod->gxalias = NULL;	// on the hunk, also of models the next map doesn't precache
+ //FIX FOR CACHE_ALLOC ERRORS:
+ 		if (mod->type == mod_sprite) mod->cache.data = NULL;
+ 	}
+@@ -334,6 +335,22 @@ model_t *Mod_LoadModel (model_t *mod, qboolean crash)
+ 	return mod;
+ }
+ 
++/*
++==================
++Mod_LoadAliasFile
++
++Loads an alias model from its whole file in temporary memory, which it
++frees, for the renderer that read it for the skins
++==================
++*/
++void Mod_LoadAliasFile (model_t *mod, void *buffer)
++{
++	loadmodel = mod;
++	COM_FileBase (mod->name, loadname);
++	mod->needload = NL_PRESENT;
++	Mod_LoadAliasModel (mod, buffer);
++}
++
+ /*
+ ==================
+ Mod_ForName
 diff --git a/WinQuake/model.h b/WinQuake/model.h
-index be9b165..7c398ba 100644
+index be9b165..fd6d138 100644
 --- a/WinQuake/model.h
 +++ b/WinQuake/model.h
 @@ -63,6 +63,9 @@ typedef struct mplane_s
@@ -114,8 +158,16 @@ index be9b165..7c398ba 100644
  
  	int			numedges;
  	medge_t		*edges;
+@@ -374,6 +384,7 @@ void	Mod_Init (void);
+ void	Mod_ClearAll (void);
+ model_t *Mod_ForName (char *name, qboolean crash);
+ void	*Mod_Extradata (model_t *mod);	// handles caching
++void	Mod_LoadAliasFile (model_t *mod, void *buffer);
+ void	Mod_TouchModel (char *name);
+ 
+ mleaf_t *Mod_PointInLeaf (float *p, model_t *model);
 diff --git a/WinQuake/r_light.c b/WinQuake/r_light.c
-index f735d50..b33d36e 100644
+index deeb858..037728a 100644
 --- a/WinQuake/r_light.c
 +++ b/WinQuake/r_light.c
 @@ -22,6 +22,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
@@ -127,7 +179,7 @@ index f735d50..b33d36e 100644
  int	r_dlightframecount;
  
  
-@@ -149,9 +151,6 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+@@ -149,9 +151,6 @@ HOT_CODE int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
  	int			s, t, ds, dt;
  	int			i;
  	mtexinfo_t	*tex;
@@ -137,7 +189,7 @@ index f735d50..b33d36e 100644
  
  	if (node->contents < 0)
  		return -1;		// didn't hit anything
-@@ -203,32 +202,8 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+@@ -203,32 +202,8 @@ HOT_CODE int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
  		if ( ds > surf->extents[0] || dt > surf->extents[1] )
  			continue;
  
@@ -184,10 +236,10 @@ index f735d50..b33d36e 100644
  	end[2] = p[2] - 2048;
 diff --git a/WinQuake/r_nds.c b/WinQuake/r_nds.c
 new file mode 100644
-index 0000000..92b7c57
+index 0000000..281fc23
 --- /dev/null
 +++ b/WinQuake/r_nds.c
-@@ -0,0 +1,2669 @@
+@@ -0,0 +1,2812 @@
 +/*
 +Copyright (C) 1996-1997 Id Software, Inc.
 +
@@ -290,6 +342,16 @@ index 0000000..92b7c57
 +
 +#define	MAX_SURFVERTS		128
 +#define	MAX_PARTICLES_DRAWN	512
++// The vertex colors of the world surfaces drawn in a frame, in VRAM bank H
++// that nothing else uses, the RAM is short
++#define	MAX_WORLDCOLORS		(32768 / sizeof(u16))
++#define	world_colors		((u16 *) VRAM_H)
++// A frame takes at most 2048 polygons and 6144 vertices, the particles get
++// what is left, keeping some for the screen rectangles drawn after them and
++// the commands still waiting in the FIFO
++#define	GX_POLYGONS			2048
++#define	GX_VERTICES			6144
++#define	GX_RESERVE			64
 +
 +#define	F32(x)				((int) ((x) * 4096))
 +#define	MIN(a,b)			((a) < (b) ? (a) : (b))
@@ -361,6 +423,8 @@ index 0000000..92b7c57
 +	mspriteframe_t	*frame;
 +	int				width, height;
 +	int				maxsize;	// VRAM size limit, lowered until all fit
++	int				stverts;	// offset of a skin's texture coordinates in the file
++	gxtex_t			tex;		// a skin's texture once uploaded
 +} modeltex_t;
 +
 +//
@@ -430,11 +494,14 @@ index 0000000..92b7c57
 +static int		num_shared_textures;
 +static qboolean	tex_mapped;					// VRAM banks mapped for the CPU
 +static byte		tex_black;					// darkest color that isn't 0
-+static modeltex_t	modeltex[MAX_MODELTEXTURES];
++// in VRAM bank I that nothing else uses, the RAM is short, all its fields
++// are words
++#define	modeltex		((modeltex_t *) VRAM_I)
++_Static_assert (MAX_MODELTEXTURES * sizeof(modeltex_t) <= 16 * 1024, "modeltex must fit in VRAM bank I");
 +static int		nummodeltex;
 +static u16		gx_light[512];				// vertex light to color
 +static u16		gx_dots[SHADEDOT_QUANT][NUMVERTEXNORMALS];	// 8.8
-+static int		gx_particles;
++static int		gx_particles;				// how many more can be drawn
 +static u16		alias_color[MAXALIASVERTS];
 +static unsigned	alias_xyz[MAXALIASVERTS];	// as 10-bit vertices, 4.6 fixed point
 +static lightcache_t	lightcache[LIGHTCACHE_SIZE];
@@ -712,28 +779,6 @@ index 0000000..92b7c57
 +	tex_models = TEXMEM_MODELS;
 +}
 +
-+// Calls fn for every skin of an alias model with its pixel data
-+static void R_ForEachSkin (aliashdr_t *paliashdr, void (*fn)(aliashdr_t *, int, void *), void *arg)
-+{
-+	mdl_t				*pmdl = (mdl_t *)((byte *)paliashdr + paliashdr->model);
-+	maliasskindesc_t	*pskindesc;
-+	maliasskingroup_t	*pgroup;
-+	int					i, j;
-+
-+	pskindesc = (maliasskindesc_t *)((byte *)paliashdr + paliashdr->skindesc);
-+	for (i = 0; i < pmdl->numskins; i++, pskindesc++)
-+	{
-+		if (pskindesc->type == ALIAS_SKIN_SINGLE)
-+		{
-+			fn (paliashdr, pskindesc->skin, arg);
-+			continue;
-+		}
-+		pgroup = (maliasskingroup_t *)((byte *)paliashdr + pskindesc->skin);
-+		for (j = 0; j < pgroup->numskins; j++)
-+			fn (paliashdr, pgroup->skindescs[j].skin, arg);
-+	}
-+}
-+
 +static void R_AddModelTexture (model_t *mod, int skin, mspriteframe_t *frame, int width, int height)
 +{
 +	modeltex_t	*t;
@@ -749,11 +794,41 @@ index 0000000..92b7c57
 +	t->maxsize = MAX_SKINSIZE;
 +}
 +
-+static void R_AddSkin (aliashdr_t *paliashdr, int skin, void *mod)
++// The skins of an alias model from its file, without loading the model: the
++// type of each and the offset of its pixels, which the loaded model has too
++static void R_AddAliasSkins (model_t *mod)
 +{
-+	mdl_t	*pmdl = (mdl_t *)((byte *)paliashdr + paliashdr->model);
++	FILE	*f;
++	mdl_t	header;
++	int		i, j, base, pos, size, numskins, type, groupskins, first = nummodeltex;
 +
-+	R_AddModelTexture (mod, skin, NULL, pmdl->skinwidth, pmdl->skinheight);
++	if (COM_FOpenFile (mod->name, &f) < 0)
++		Sys_Error ("R_AddAliasSkins: can't open %s", mod->name);
++	base = ftell (f);
++	fread (&header, 1, sizeof(header), f);
++	numskins = LittleLong (header.numskins);
++	size = LittleLong (header.skinwidth) * LittleLong (header.skinheight);
++	for (i = 0, pos = sizeof(header); i < numskins; i++)
++	{
++		fseek (f, base + pos, SEEK_SET);
++		fread (&type, 1, sizeof(type), f);
++		pos += sizeof(type);
++		if (LittleLong (type) == ALIAS_SKIN_SINGLE)
++			groupskins = 1;
++		else
++		{
++			// the number of skins and their intervals before the pixels
++			fread (&groupskins, 1, sizeof(groupskins), f);
++			groupskins = LittleLong (groupskins);
++			pos += sizeof(daliasskingroup_t) + groupskins * sizeof(daliasskininterval_t);
++		}
++		for (j = 0; j < groupskins; j++, pos += size)
++			R_AddModelTexture (mod, pos, NULL, LittleLong (header.skinwidth), LittleLong (header.skinheight));
++	}
++	// the texture coordinates follow the skins
++	for (i = first; i < nummodeltex; i++)
++		modeltex[i].stverts = pos;
++	fclose (f);
 +}
 +
 +static void R_AddSprite (model_t *mod)
@@ -852,9 +927,8 @@ index 0000000..92b7c57
 +		goto next;
 +	}
 +done:
-+	for (j = start; j < numtris; j++)
-+		if (used[j] == 2)
-+			used[j] = 0;
++	for (j = 0; j < count; j++)
++		used[striptris[j]] = 0;
 +	return count;
 +}
 +
@@ -936,56 +1010,92 @@ index 0000000..92b7c57
 +R_SkinCoverage
 +
 +Marks the texels of a skin the triangles of its model cover, their middles
-+inside a triangle. The texels around them aren't painted or have the
++inside a triangle, from the texture coordinates and triangles in the file. The texels around them aren't painted or have the
 +background, like the blue around the shotguns.
 +================
 +*/
 +__attribute__((target("arm")))
-+static void R_SkinCoverage (model_t *mod, byte *mask, int w, int h)
++static void R_SkinCoverage (byte *file, int stverts, byte *mask, int w, int h)
 +{
-+	aliashdr_t	*paliashdr = Cache_Check (&mod->cache);
-+	mdl_t		*pmdl;
-+	stvert_t	*stverts;
-+	mtriangle_t	*tri;
-+	int			i, j, k, x, y, x0, x1, s[3], t[3], miny, maxy;
-+
-+	memset (mask, 1, w * h);	// all of it when the model is gone
-+	if (!paliashdr)
-+		return;
-+	pmdl = (mdl_t *)((byte *)paliashdr + paliashdr->model);
-+	stverts = (stvert_t *)((byte *)paliashdr + paliashdr->stverts);
-+	tri = (mtriangle_t *)((byte *)paliashdr + paliashdr->triangles);
++	mdl_t		*header = (mdl_t *)file;
++	stvert_t	*st = (stvert_t *)(file + stverts);
++	dtriangle_t	*tri = (dtriangle_t *)(st + LittleLong (header->numverts));
++	int			i, j, k, y, y0, y1, s[3], t[3], miny, maxy;
++	int			x0[MAX_LBM_HEIGHT], x1[MAX_LBM_HEIGHT];	// the span of each row
++	int			dt, step, q, r, sign, numtris = LittleLong (header->numtris);
 +
 +	// the spans between the edges at the middles of the rows, in half texels
 +	memset (mask, 0, w * h);
-+	for (i = 0; i < pmdl->numtris; i++, tri++)
++	for (i = 0; i < numtris; i++, tri++)
 +	{
 +		for (j = 0; j < 3; j++)
 +		{
-+			k = tri->vertindex[j];
-+			s[j] = 2 * ((stverts[k].s >> 16) + (!tri->facesfront && stverts[k].onseam ? w / 2 : 0));
-+			t[j] = 2 * (stverts[k].t >> 16);
++			k = LittleLong (tri->vertindex[j]);
++			s[j] = 2 * (LittleLong (st[k].s) + (!LittleLong (tri->facesfront) && LittleLong (st[k].onseam) ? w / 2 : 0));
++			t[j] = 2 * LittleLong (st[k].t);
 +		}
 +		miny = MAX (MIN (t[0], MIN (t[1], t[2])) / 2, 0);
 +		maxy = MIN (MAX (t[0], MAX (t[1], t[2])) / 2, h - 1);
 +		for (y = miny; y <= maxy; y++)
 +		{
-+			x0 = 0x7fffffff;
-+			x1 = -1;
-+			for (j = 0; j < 3; j++)
++			x0[y] = 0x7fffffff;
++			x1[y] = -1;
++		}
++		for (j = 0; j < 3; j++)
++		{
++			// the edge at the rows with their middle, 2 * y + 1, in its
++			// span: s[j] + (s[k] - s[j]) * (2 * y + 1 - t[j]) / (t[k] - t[j]),
++			// stepped as the quotient q and remainder r of |s[k] - s[j]| *
++			// |2 * y + 1 - t[j]| / |t[k] - t[j]| for its sign
++			k = j == 2 ? 0 : j + 1;
++			if (t[j] == t[k])
++				continue;
++			y0 = MAX (MIN (t[j], t[k]) / 2, miny);	// 2 * y + 1 >= the smaller
++			y1 = MIN ((MAX (t[j], t[k]) - 1) / 2, maxy);	// 2 * y + 1 <= the larger
++			if (MAX (t[j], t[k]) < 1 || y0 > y1)
++				continue;
++			dt = abs (t[k] - t[j]);
++			sign = s[k] < s[j] ? -1 : 1;
++			step = 2 * abs (s[k] - s[j]);
++			q = abs (s[k] - s[j]) * abs (2 * y0 + 1 - t[j]);
++			r = q % dt;
++			q /= dt;
++			for (y = y0; ; y++)
 +			{
-+				k = j == 2 ? 0 : j + 1;
-+				if (t[j] == t[k] || 2 * y + 1 < MIN (t[j], t[k]) || 2 * y + 1 > MAX (t[j], t[k]))
-+					continue;
-+				x = s[j] + (s[k] - s[j]) * (2 * y + 1 - t[j]) / (t[k] - t[j]);
-+				x0 = MIN (x0, x);
-+				x1 = MAX (x1, x);
++				x0[y] = MIN (x0[y], s[j] + sign * q);
++				x1[y] = MAX (x1[y], s[j] + sign * q);
++				if (y == y1)
++					break;
++				// |2 * y + 1 - t[j]| grows away from t[j] and shrinks towards it
++				if (t[k] > t[j])
++				{
++					q += step / dt;
++					r += step % dt;
++					if (r >= dt)
++					{
++						r -= dt;
++						q++;
++					}
++				}
++				else
++				{
++					q -= step / dt;
++					r -= step % dt;
++					if (r < 0)
++					{
++						r += dt;
++						q--;
++					}
++				}
 +			}
++		}
++		for (y = miny; y <= maxy; y++)
++		{
 +			// the texels with their middle, 2 * x + 1, in the span
-+			x0 = MAX (x0 / 2, 0);
-+			x1 = MIN ((x1 - 1) / 2, w - 1);
-+			if (x0 <= x1)
-+				memset (mask + y * w + x0, 1, x1 - x0 + 1);
++			x0[y] = MAX (x0[y] / 2, 0);
++			x1[y] = MIN ((x1[y] - 1) / 2, w - 1);
++			if (x0[y] <= x1[y])
++				memset (mask + y * w + x0[y], 1, x1[y] - x0[y] + 1);
 +		}
 +	}
 +}
@@ -1041,6 +1151,91 @@ index 0000000..92b7c57
 +
 +/*
 +================
++R_UploadSkins
++
++Uploads the n skins of an alias model from its file, which loads the model
++too when it's not in the cache: a level's models don't all fit in it, each
++is loaded once for its skins and hardware data. Each skin and the texels its
++triangles cover are resampled to the texture size together and filled in
++there. Returns false when VRAM is full.
++================
++*/
++static qboolean R_UploadSkins (model_t *mod, modeltex_t *skins, int n)
++{
++	int			i, k, x, y, u, ustep, w, h, gw, gh, len, mark;
++	aliashdr_t	*cached = Cache_Check (&mod->cache);
++	mdl_t		*pmdl;
++	modeltex_t	*t;
++	gxalias_t	*gx;
++	byte		*file, *pixels, *mask, *skin;
++	FILE		*f;
++
++	// a model in the cache only needs its skins, texture coordinates and
++	// triangles, from the start of the file
++	len = COM_FOpenFile (mod->name, &f);
++	if (len < 0)
++		Sys_Error ("R_UploadSkins: can't open %s", mod->name);
++	if (cached)
++	{
++		pmdl = (mdl_t *)((byte *)cached + cached->model);
++		len = skins->stverts + pmdl->numverts * sizeof(stvert_t) + pmdl->numtris * sizeof(dtriangle_t);
++	}
++	file = Hunk_TempAlloc (len);
++	if (!file)
++		Sys_Error ("R_UploadSkins: not enough memory for %s", mod->name);
++	fread (file, 1, len, f);
++	fclose (f);
++
++	for (i = 0, t = skins; i < n; i++, t++)
++	{
++		w = t->width;
++		h = t->height;
++		gw = R_TexSize (w, t->maxsize);
++		gh = R_TexSize (h, t->maxsize);
++		if (tex_models + gw * gh > TEXMEM_END)
++			break;
++		mark = Hunk_LowMark ();
++		mask = Hunk_AllocName (w * h + gw * gh * 2, "skin");
++		skin = mask + w * h;
++		pixels = file + t->skin;
++		R_SkinCoverage (file, t->stverts, mask, w, h);
++		ustep = (w << 16) / gw;	// 16.16 fixed point, the middles of the texels
++		for (y = 0; y < gh; y++)
++		{
++			k = ((2 * y + 1) * h / (2 * gh)) * w;
++			for (x = 0, u = ustep / 2; x < gw; x++, u += ustep)
++			{
++				skin[y * gw + x] = pixels[k + (u >> 16)];
++				skin[gw * gh + y * gw + x] = mask[k + (u >> 16)];
++			}
++		}
++		R_FillSkin (skin, skin + gw * gh, gw, gh);
++		t->tex.param = R_UploadTexture (skin, gw, gw, gh, gw, gh, &tex_models, false);
++		t->tex.scale[0] = (gw << 12) / w;
++		t->tex.scale[1] = (gh << 12) / h;
++		Hunk_FreeToLowMark (mark);
++	}
++
++	if (cached)
++		Hunk_FreeTemp ();
++	else
++		Mod_LoadAliasFile (mod, file);
++	if (i)
++	{
++		R_SetupAliasModel (mod, i);
++		gx = mod->gxalias;
++		for (k = 0; k < i; k++)
++		{
++			gx->skins[k].offset = skins[k].skin;
++			gx->skins[k].tex = skins[k].tex;
++		}
++		gx->numskins = i;
++	}
++	return i == n;
++}
++
++/*
++================
 +R_UploadModelTextures
 +
 +Uploads the skins of all alias models and the frames of all sprites of the
@@ -1049,28 +1244,17 @@ index 0000000..92b7c57
 +*/
 +static void R_UploadModelTextures (void)
 +{
-+	int			i, j, k, x, y, u, ustep, total, w, h, gw, gh, filebase = 0;
-+	model_t		*mod, *filemod = NULL;
++	int			i, j, total, gw, gh;
++	model_t		*mod;
 +	modeltex_t	*t, *largest;
-+	gxalias_t	*skins;
 +	gxtex_t		*tex;
-+	byte		*pixels, *skin = NULL, *mask;
-+	FILE		*f = NULL;
 +
 +	nummodeltex = 0;
 +	for (i = 1; i < MAX_MODELS && cl.model_precache[i]; i++)
 +	{
 +		mod = cl.model_precache[i];
-+		mod->gxalias = NULL;
 +		if (mod->type == mod_alias)
-+		{
-+			// the hardware data too while the model is in the cache, a
-+			// level's models don't all fit in it while it loads
-+			j = nummodeltex;
-+			R_ForEachSkin (Mod_Extradata (mod), R_AddSkin, mod);
-+			if (nummodeltex > j)
-+				R_SetupAliasModel (mod, nummodeltex - j);
-+		}
++			R_AddAliasSkins (mod);
 +		else if (mod->type == mod_sprite)
 +			R_AddSprite (mod);
 +	}
@@ -1091,68 +1275,27 @@ index 0000000..92b7c57
 +	}
 +
 +	tex_models = TEXMEM_MODELS;
-+	for (i = 0, t = modeltex; i < nummodeltex; i++, t++)
++	for (i = 0; i < nummodeltex; i = j)
 +	{
++		t = &modeltex[i];
++		for (j = i + 1; j < nummodeltex && t->skin >= 0 && modeltex[j].model == t->model; j++)
++			;
++		if (t->skin >= 0)
++		{
++			if (!R_UploadSkins (t->model, t, j - i))
++				break;
++			continue;
++		}
 +		gw = R_TexSize (t->width, t->maxsize);
 +		gh = R_TexSize (t->height, t->maxsize);
 +		if (tex_models + gw * gh > TEXMEM_END)
 +			break;
-+		if (t->skin >= 0)
-+		{
-+			// the skins stay in the model file, see Mod_LoadAliasSkin
-+			if (filemod != t->model)
-+			{
-+				if (f)
-+					fclose (f);
-+				filemod = t->model;
-+				if (COM_FOpenFile (filemod->name, &f) < 0)
-+					Sys_Error ("R_UploadModelTextures: can't open %s", filemod->name);
-+				filebase = ftell (f);
-+			}
-+			// the skin and the texels its triangles cover, resampled to the
-+			// texture size together and filled in there. The coverage needs
-+			// the model in the cache, loaded before the temporary memory,
-+			// which loading would free.
-+			Mod_Extradata (t->model);
-+			pixels = Hunk_TempAlloc ((t->width * t->height + gw * gh) * 2);
-+			if (!pixels)
-+				Sys_Error ("R_UploadModelTextures: not enough memory");
-+			fseek (f, filebase + t->skin, SEEK_SET);
-+			fread (pixels, 1, t->width * t->height, f);
-+			mask = pixels + t->width * t->height;
-+			skin = mask + t->width * t->height;
-+			R_SkinCoverage (t->model, mask, t->width, t->height);
-+			ustep = (t->width << 16) / gw;	// 16.16 fixed point, the middles of the texels
-+			for (y = 0; y < gh; y++)
-+			{
-+				k = ((2 * y + 1) * t->height / (2 * gh)) * t->width;
-+				for (x = 0, u = ustep / 2; x < gw; x++, u += ustep)
-+				{
-+					skin[y * gw + x] = pixels[k + (u >> 16)];
-+					skin[gw * gh + y * gw + x] = mask[k + (u >> 16)];
-+				}
-+			}
-+			R_FillSkin (skin, skin + gw * gh, gw, gh);
-+
-+			skins = t->model->gxalias;
-+			skins->skins[skins->numskins].offset = t->skin;
-+			tex = &skins->skins[skins->numskins++].tex;
-+		}
-+		else
-+		{
-+			tex = Hunk_AllocName (sizeof(*tex), "gxsprite");
-+			t->frame->pcachespot = tex;
-+			pixels = t->frame->pixels;
-+		}
-+		if (t->skin >= 0)
-+			tex->param = R_UploadTexture (skin, gw, gw, gh, gw, gh, &tex_models, false);
-+		else
-+			tex->param = R_UploadTexture (pixels, t->width, t->width, t->height, gw, gh, &tex_models, true);
++		tex = Hunk_AllocName (sizeof(*tex), "gxsprite");
++		t->frame->pcachespot = tex;
++		tex->param = R_UploadTexture (t->frame->pixels, t->width, t->width, t->height, gw, gh, &tex_models, true);
 +		tex->scale[0] = (gw << 12) / t->width;
 +		tex->scale[1] = (gh << 12) / t->height;
 +	}
-+	if (f)
-+		fclose (f);
 +	R_MapTextures (false);
 +}
 +
@@ -1191,9 +1334,9 @@ index 0000000..92b7c57
 +	return (sizeof(gxsurf_t) + n * 4 + ((n * 2 + 3) & ~3) + R_SurfaceStyles (surf) * n + 3) & ~3;
 +}
 +
-+#define	TJ_CELL			9		// 64 units in 1/8 units
-+#define	TJ_CELLOF(x)	(((x) + 256) >> TJ_CELL)	// half a cell off the walls on the 64 unit grid
-+#define	TJ_HASH			4096
++#define	TJ_CELL			7		// 16 units in 1/8 units
++#define	TJ_CELLOF(x)	(((x) + 64) >> TJ_CELL)	// half a cell off the walls on the 16 unit grid
++#define	TJ_HASH			8192
 +#define	TJ_MAXINSERT	32		// vertices added to an edge
 +
 +static int R_TJHash (int cx, int cy, int cz)
@@ -1208,7 +1351,7 @@ index 0000000..92b7c57
 +A vertex of one face in the middle of an edge of another is a T-junction,
 +the hardware leaves a crack along that edge. The vertices on each edge, at
 +most 1/8 unit off it, are found through a hash of the vertex positions by
-+64 unit cells. Returns them for R_SurfaceVerts, at offset ecache[edge] the
++16 unit cells. Returns them for R_SurfaceVerts, at offset ecache[edge] the
 +number of them, then the vertices from v[0] to v[1]. In high hunk memory,
 +freed with the rest of the geometry.
 +================
@@ -1609,11 +1752,11 @@ index 0000000..92b7c57
 +
 +static void R_EmitSurface (model_t *mod, gxsurf_t *gx, u16 *color, unsigned *st);
 +
-+HOT_CODE static void R_DrawGXSurface (model_t *mod, msurface_t *surf)
++// The vertex colors of a surface from its light styles and the dynamic lights
++HOT_CODE static void R_SurfaceColors (model_t *mod, msurface_t *surf, u16 *color)
 +{
 +	gxsurf_t	*gx = surf->gx;
-+	int			n = gx->numverts, i, j, k, l, sv[MAXLIGHTMAPS], vlight[MAX_SURFVERTS];
-+	u16			color[MAX_SURFVERTS];
++	int			n = gx->numverts, i, k, l, sv[MAXLIGHTMAPS], vlight[MAX_SURFVERTS];
 +	byte		*light;
 +
 +	if (surf->flags & SURF_DRAWTILED || r_fullbright.value)
@@ -1638,8 +1781,14 @@ index 0000000..92b7c57
 +		for (i = 0; i < n; i++)
 +			color[i] = gx_light[MIN (vlight[i], 511)];
 +	}
++}
 +
-+	R_EmitSurface (mod, gx, color, gx->st);
++static void R_DrawGXSurface (model_t *mod, msurface_t *surf)
++{
++	u16	color[MAX_SURFVERTS];
++
++	R_SurfaceColors (mod, surf, color);
++	R_EmitSurface (mod, surf->gx, color, surf->gx->st);
 +}
 +
 +// The polygon of a surface as a quad strip zig-zagging across it: 1 0, 2 n-1,
@@ -1733,10 +1882,13 @@ index 0000000..92b7c57
 +	R_BindTexture (t->gxparam[0], t->gxscale);
 +	if (surf->flags & SURF_DRAWTURB)
 +	{
-+		// liquids flow slowly
++		// liquids flow slowly, the time wraps at whole repeats of the
++		// texture before the fixed point overflows
++		float	flow = fmodf (cl.time, 256);
++
 +		MATRIX_CONTROL = GL_TEXTURE;
-+		MATRIX_TRANSLATE = F32 (cl.time * 2 * 16);
-+		MATRIX_TRANSLATE = F32 (cl.time * 16);
++		MATRIX_TRANSLATE = F32 (flow * 2 * 16);
++		MATRIX_TRANSLATE = F32 (flow * 16);
 +		MATRIX_TRANSLATE = 0;
 +		MATRIX_CONTROL = GL_MODELVIEW;
 +	}
@@ -1987,12 +2139,29 @@ index 0000000..92b7c57
 +	}
 +}
 +
++// The texture of the next world surface chain to draw, the sky's are drawn
++// apart
++static texture_t *R_NextWorldTexture (model_t *mod, int *i)
++{
++	texture_t	*t;
++
++	while (*i <= mod->numtextures)
++	{
++		t = *i < mod->numtextures ? mod->textures[*i] : r_notexture_mip;
++		(*i)++;
++		if (t && t->texturechain)
++			return t;
++	}
++	return NULL;
++}
++
 +static void R_DrawWorld (void)
 +{
-+	int			i;
++	int			i, n, numcolors;
 +	model_t		*mod = cl.worldmodel;
 +	texture_t	*t, *anim;
 +	msurface_t	*s;
++	gxsurf_t	*gx;
 +
 +	currententity = &r_worldentity;
 +	VectorCopy (r_origin, modelorg);
@@ -2006,11 +2175,26 @@ index 0000000..92b7c57
 +		modelorg_i[i] = modelorg[i] * VERTEX_SCALE;
 +	R_RecursiveWorldNode (mod->nodes, 15);
 +
-+	for (i = 0; i <= mod->numtextures; i++)
++	// The vertex colors before any surface goes to the hardware: until it
++	// showed the last frame it takes no more than a FIFO full of commands,
++	// this work fills that wait
++	numcolors = 0;
++	for (i = 0; (t = R_NextWorldTexture (mod, &i)); )
 +	{
-+		t = i < mod->numtextures ? mod->textures[i] : r_notexture_mip;
-+		if (!t || !t->texturechain)
++		if (t->texturechain->flags & SURF_DRAWSKY)
 +			continue;
++		for (s = t->texturechain; s; s = s->texturechain)
++		{
++			if (numcolors + s->gx->numverts > MAX_WORLDCOLORS)
++				goto colored;	// the rest work them out as they go
++			R_SurfaceColors (mod, s, world_colors + numcolors);
++			numcolors += s->gx->numverts;
++		}
++	}
++colored:
++
++	for (i = 0, n = 0; (t = R_NextWorldTexture (mod, &i)); )
++	{
 +		if (t->texturechain->flags & SURF_DRAWSKY)
 +		{
 +			R_DrawSkySurfaces (mod, t);
@@ -2019,7 +2203,14 @@ index 0000000..92b7c57
 +		anim = R_TextureAnimation (t);
 +		R_BindBrushTexture (anim, t->texturechain);
 +		for (s = t->texturechain; s; s = s->texturechain)
-+			R_DrawGXSurface (mod, s);
++		{
++			gx = s->gx;
++			if (n + gx->numverts <= numcolors)
++				R_EmitSurface (mod, gx, world_colors + n, gx->st);
++			else
++				R_DrawGXSurface (mod, s);
++			n += gx->numverts;
++		}
 +	}
 +}
 +
@@ -2334,7 +2525,8 @@ index 0000000..92b7c57
 +		particle_up[i] = vup[i] * 16384;
 +		particle_right[i] = vright[i] * 16384;
 +	}
-+	gx_particles = 0;
++	gx_particles = MIN (MAX_PARTICLES_DRAWN, MIN (GX_POLYGONS - GFX_POLYGON_RAM_USAGE,
++		(GX_VERTICES - GFX_VERTEX_RAM_USAGE) / 3) - GX_RESERVE);
 +	GFX_TEX_FORMAT = 0;
 +	GFX_BEGIN = GL_TRIANGLES;
 +}
@@ -2343,7 +2535,7 @@ index 0000000..92b7c57
 +{
 +	int		x, y, z, ux, uy, uz, rx, ry, rz, depth, scale;
 +
-+	if (gx_particles++ >= MAX_PARTICLES_DRAWN)
++	if (gx_particles-- <= 0)
 +		return;
 +
 +	x = p->org[0] * VERTEX_SCALE;
@@ -2715,8 +2907,9 @@ index 0000000..92b7c57
 +	R_MarkLeaves ();
 +	R_DrawWorld ();
 +	R_DrawEntitiesOnList ();
-+	R_DrawParticles ();
++	// the particles are left out first when a frame has too many polygons
 +	R_DrawViewModel ();
++	R_DrawParticles ();
 +	R_DrawCrosshair ();
 +	if (key_dest == key_menu || scr_drawdialog)
 +		R_DimView ();
@@ -2766,6 +2959,8 @@ index 0000000..92b7c57
 +	Cvar_RegisterVariable (&r_novis);
 +
 +	R_InitParticles ();
++	vramSetBankH (VRAM_H_LCD);	// world_colors
++	vramSetBankI (VRAM_I_LCD);	// modeltex
 +
 +	// light 128 is the texture as it is, up to twice as bright
 +	for (i = 0; i < 512; i++)

@@ -22,9 +22,9 @@ frees or moves samples that play, their hardware channel stops before
 it plays what comes there next.
 ---
  WinQuake/snd_dma.c |   6 +-
- WinQuake/snd_nds.c | 333 +++++++++++++++++++++++++++++++++++++++++++++
+ WinQuake/snd_nds.c | 336 +++++++++++++++++++++++++++++++++++++++++++++
  WinQuake/sound.h   |   3 +
- 3 files changed, 341 insertions(+), 1 deletion(-)
+ 3 files changed, 344 insertions(+), 1 deletion(-)
  create mode 100644 WinQuake/snd_nds.c
 
 diff --git a/WinQuake/snd_dma.c b/WinQuake/snd_dma.c
@@ -53,10 +53,10 @@ index a261f12..6df279d 100644
  	if (!sound_started || !shm || (!shm->buffer && !pDSBuf))
 diff --git a/WinQuake/snd_nds.c b/WinQuake/snd_nds.c
 new file mode 100644
-index 0000000..8804d23
+index 0000000..6dd4055
 --- /dev/null
 +++ b/WinQuake/snd_nds.c
-@@ -0,0 +1,333 @@
+@@ -0,0 +1,336 @@
 +/*
 +Copyright (C) 1996-1997 Id Software, Inc.
 +
@@ -193,7 +193,10 @@ index 0000000..8804d23
 +	channel_t	*ch = &channels[channel];
 +	hwchannel_t	*h = &hw[slot];
 +	uintptr_t	start = (uintptr_t) sc->data & ~3;	// whole words from an aligned address
-+	unsigned	bytes = sc->length * sc->width, words = (bytes + 3) / 4, loop;
++	unsigned	bytes = sc->length * sc->width, loop;
++	// a loop ends at the last whole word, the bytes after the data aren't
++	// part of the sound
++	unsigned	words = sc->loopstart >= 0 ? bytes / 4 : (bytes + 3) / 4;
 +
 +	h->channel = channel;
 +	h->sc = sc;

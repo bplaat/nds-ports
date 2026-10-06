@@ -211,3 +211,6 @@ of main RAM on a 16-bit bus at half its clock.
 - [0031](patches/0031-Copy-memory-fast-on-the-DS.patch): `mem_nds.c`
   replaces newlib's `memcpy` and `memset`, which copy a byte at a time in
   Thumb mode, with word copies from ITCM.
+- [0032](patches/0032-Use-single-precision-and-reduce-floating-point-work.patch):
+  Use single-precision configuration parsing and mouse math; reuse sine
+  samples across music harmonics and normalize with one division per wave.

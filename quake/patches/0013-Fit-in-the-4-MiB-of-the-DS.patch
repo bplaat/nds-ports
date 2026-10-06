@@ -38,11 +38,11 @@ what was in use:
  WinQuake/pr_edict.c |  2 +-
  WinQuake/quakedef.h |  3 +-
  WinQuake/r_part.c   |  3 +-
- WinQuake/snd_mem.c  | 30 +++++++++++++-
+ WinQuake/snd_mem.c  | 34 +++++++++++++++-
  WinQuake/sv_main.c  |  3 ++
  WinQuake/zone.c     | 95 ++++++++++++++++++++++++++++++++++++++-------
  WinQuake/zone.h     |  4 ++
- 10 files changed, 179 insertions(+), 39 deletions(-)
+ 10 files changed, 183 insertions(+), 39 deletions(-)
 
 diff --git a/WinQuake/common.c b/WinQuake/common.c
 index 76503b6..6da0f96 100644
@@ -273,7 +273,7 @@ index 72af953..529f757 100644
  										//  on the command line
  
 diff --git a/WinQuake/snd_mem.c b/WinQuake/snd_mem.c
-index 71e32aa..82e21ee 100644
+index 71e32aa..9708608 100644
 --- a/WinQuake/snd_mem.c
 +++ b/WinQuake/snd_mem.c
 @@ -94,7 +94,7 @@ void ResampleSfx (sfx_t *sfx, int inrate, int inwidth, byte *data)
@@ -285,16 +285,29 @@ index 71e32aa..82e21ee 100644
  {
      char	namebuffer[256];
  	byte	*data;
-@@ -136,7 +136,7 @@ sfxcache_t *S_LoadSound (sfx_t *s)
+@@ -128,6 +128,7 @@ sfxcache_t *S_LoadSound (sfx_t *s)
+ 	if (info.channels != 1)
+ 	{
+ 		Con_Printf ("%s is a stereo sample\n",s->name);
++		Hunk_FreeTemp ();
+ 		return NULL;
+ 	}
+ 
+@@ -136,9 +137,12 @@ sfxcache_t *S_LoadSound (sfx_t *s)
  
  	len = len * info.width * info.channels;
  
 -	sc = Cache_Alloc ( &s->cache, len + sizeof(sfxcache_t), s->name);
 +	sc = alloc ( &s->cache, len + sizeof(sfxcache_t), s->name);
  	if (!sc)
++	{
++		Hunk_FreeTemp ();
  		return NULL;
++	}
  	
-@@ -147,10 +147,36 @@ sfxcache_t *S_LoadSound (sfx_t *s)
+ 	sc->length = info.samples;
+ 	sc->loopstart = info.loopstart;
+@@ -147,10 +151,36 @@ sfxcache_t *S_LoadSound (sfx_t *s)
  	sc->stereo = info.channels;
  
  	ResampleSfx (s, sc->speed, sc->width, data + info.dataofs);

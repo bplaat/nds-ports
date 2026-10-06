@@ -156,7 +156,8 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
 
 - [0014](patches/0014-Run-the-local-server-at-20-Hz.patch): The local
   server, its physics and QuakeC, runs at 20 Hz instead of every frame, the
-  client interpolates the entities in between.
+  client interpolates the entities in between. A short button press between
+  two server frames still counts.
 - [0015](patches/0015-Use-single-precision-sine-and-cosine.patch):
   `AngleVectors` uses the float sine and cosine, a lot cheaper in software.
 - [0016](patches/0016-Work-out-the-sound-positions-in-integers.patch):
@@ -166,16 +167,26 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   is loaded by the first level and stays, the next levels only read its
   globals again instead of reading and checking all 400 KiB, half a second
   less for every level.
+- [0018](patches/0018-Compare-with-the-planes-instead-of-subtracting.patch):
+  `SV_HullPointContents` and `Mod_PointInLeaf` compare a point with a
+  plane's distance instead of subtracting it first, a software float
+  operation less for every BSP node, which monsters walking around do a lot.
+- [0019](patches/0019-Leave-freed-hunk-memory-as-it-is.patch): Freed hunk
+  memory isn't cleared, allocations clear their own, which saves clearing
+  every temporary file buffer while a level loads.
 
 ### The DS platform
 
-- [0018](patches/0018-Add-a-Nintendo-DS-build.patch): `Makefile.nds`
+- [0020](patches/0020-Add-a-Nintendo-DS-build.patch): `Makefile.nds`
   builds a DSi enhanced `.nds` with devkitARM and libnds/calico. The
   collision code, `memcpy`/`memset` and libgcc's software floating point,
   taken out of libgcc, run from ITCM as ARM code, `HOT_CODE` puts single
-  functions there, the rest is Thumb code in main RAM. Constants are single
-  precision, so they don't drag expressions to double.
-- [0019](patches/0019-Add-the-DS-system-layer.patch): `sys_nds.c` switches
+  functions there, like the QuakeC interpreter, the rest is Thumb code in
+  main RAM. Float comparisons come from `fcmp_nds.s`, without the three
+  calls and five saved registers of libgcc's, which made a fifth of the
+  time in fights. Constants are single precision, so they don't drag
+  expressions to double.
+- [0021](patches/0021-Add-the-DS-system-layer.patch): `sys_nds.c` switches
   the ARM9 to 134 MHz in DSi mode, runs Quake in a thread with its stack in
   main RAM (Quake keeps arrays of up to 32 KiB on the stack, the ARM9 stack
   is in the 16 KiB DTCM), gives the hunk all RAM that is left, reads
@@ -184,7 +195,7 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   touch screen. The game data in the ROM
   is searched before the SD card, which gets the written files. The player is
   named after the user of the DS settings.
-- [0020](patches/0020-Add-the-DS-3D-renderer.patch): `r_nds.c` draws the
+- [0022](patches/0022-Add-the-DS-3D-renderer.patch): `r_nds.c` draws the
   world, brush and alias models, sprites and particles with the geometry
   engine. Vertices are 16-bit fixed point world coordinates and surfaces are
   quad strips zig-zagging across their polygons. Textures stay 8-bit in VRAM
@@ -206,8 +217,11 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   relative to the eye so they don't wobble. The surfaces' hardware data is
   packed without pointers and the temporary memory is freed after a load,
   so the cache has room for every shareware level's models and sounds. The world traversal, culling,
-  lighting, alias models and particles run from ITCM.
-- [0021](patches/0021-Add-DS-video.patch): `vid_nds.c` shows the 3D view
+  lighting, alias models and particles run from ITCM. The world's vertex
+  colors are worked out while the hardware still waits to show the last
+  frame. A level reads each alias model's file once, for its skins and the
+  model.
+- [0023](patches/0023-Add-DS-video.patch): `vid_nds.c` shows the 3D view
   on the top screen with a text layer over it, Quake's font and the loading
   plaque as tiles. Edge marking fills the polygon edges. The touch screen shows the
   320x200 2D drawing scaled by the affine background hardware, smoothed by a
@@ -217,10 +231,10 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   when drawn again: it's cut into tiles for the same layers on the top
   screen, scrolled to the middle, only the tiles with something on them take
   VRAM and only the ones that changed are copied.
-- [0022](patches/0022-Add-DS-buttons.patch): `in_nds.c` maps the buttons
+- [0024](patches/0024-Add-DS-buttons.patch): `in_nds.c` maps the buttons
   to Quake's keys and taps to the weapons and handles the lid and power
   button.
-- [0023](patches/0023-Add-the-DS-touch-screen.patch): `sbar_nds.c` draws
+- [0025](patches/0025-Add-the-DS-touch-screen.patch): `sbar_nds.c` draws
   the map, stats and weapon cells below the status bar with Quake's own
   graphics, redrawn only where they changed. The weapons are drawn from their
   models when the game starts, textured and lit. The map is a line for each
@@ -229,7 +243,7 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   time in the intermission's big numbers instead. With the options and while
   no game runs behind the menu it shows the controls in a dark inset in the
   middle of the console background. When you die the time stops.
-- [0024](patches/0024-Add-DS-sound.patch): `snd_nds.c` plays every sound
+- [0026](patches/0026-Add-DS-sound.patch): `snd_nds.c` plays every sound
   channel on a hardware channel of its own, which does the resampling,
   volume and stereo panning, instead of mixing them in software: the
   ambient and entity sounds on channels 0-11, the four loudest static
@@ -237,6 +251,6 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   not with the level, and only the sounds that play stay in the cache, the
   ambient ones only near water or sky, so the models aren't pushed out of
   it.
-- [0025](patches/0025-Copy-memory-fast-on-the-DS.patch): `mem_nds.c`
+- [0027](patches/0027-Copy-memory-fast-on-the-DS.patch): `mem_nds.c`
   replaces newlib's `memcpy` and `memset`, which copy a byte at a time in
   Thumb mode, with word copies from ITCM.

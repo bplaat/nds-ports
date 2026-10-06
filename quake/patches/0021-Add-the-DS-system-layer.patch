@@ -24,8 +24,8 @@ player is named after the user of the DS settings.
 ---
  WinQuake/common.c  |  27 ++-
  WinQuake/sys.h     |   3 +
- WinQuake/sys_nds.c | 418 +++++++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 444 insertions(+), 4 deletions(-)
+ WinQuake/sys_nds.c | 419 +++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 445 insertions(+), 4 deletions(-)
  create mode 100644 WinQuake/sys_nds.c
 
 diff --git a/WinQuake/common.c b/WinQuake/common.c
@@ -99,10 +99,10 @@ index c5d61a7..1b19721 100644
  double Sys_FloatTime (void);
 diff --git a/WinQuake/sys_nds.c b/WinQuake/sys_nds.c
 new file mode 100644
-index 0000000..c48396a
+index 0000000..6de9d49
 --- /dev/null
 +++ b/WinQuake/sys_nds.c
-@@ -0,0 +1,418 @@
+@@ -0,0 +1,419 @@
 +/*
 +Copyright (C) 1996-1997 Id Software, Inc.
 +
@@ -279,8 +279,9 @@ index 0000000..c48396a
 +// characters are graphics, like the separator lines
 +static void Sys_PrintText (const char *text)
 +{
-+	char	plain[1024], *out = plain;
-+	int	c, dot;
++	static char	plain[1024];	// emulators can't read it from the DTCM stack
++	char		*out = plain;
++	int			c, dot;
 +
 +	for (; *text && out < plain + sizeof(plain) - 1; text++)
 +	{

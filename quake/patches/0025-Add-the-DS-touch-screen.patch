@@ -18,7 +18,8 @@ the controls, in a dark inset in the middle of the console background.
 
 The pictures of the weapons are drawn from their models when the game
 starts: the ones you pick up, the axe and shotgun as you hold them, seen
-from the side, textured and lit, with Quake's colormap.
+from the side, textured and lit, with Quake's colormap. Which pixels a
+triangle covers is worked out in integers.
 
 The map is made of the walls of the world, a line for each face seen
 from above (Sbar_BuildMap), a sloped one like a vault its bottom edge,
@@ -32,9 +33,9 @@ when it changes.
  WinQuake/model.h    |   6 +
  WinQuake/sbar.c     |  15 +-
  WinQuake/sbar.h     |   8 +
- WinQuake/sbar_nds.c | 925 ++++++++++++++++++++++++++++++++++++++++++++
+ WinQuake/sbar_nds.c | 943 ++++++++++++++++++++++++++++++++++++++++++++
  WinQuake/screen.c   |   2 +
- 8 files changed, 955 insertions(+), 9 deletions(-)
+ 8 files changed, 973 insertions(+), 9 deletions(-)
  create mode 100644 WinQuake/sbar_nds.c
 
 diff --git a/WinQuake/menu.c b/WinQuake/menu.c
@@ -67,10 +68,10 @@ index 804370e..0311dae 100644
  
  
 diff --git a/WinQuake/model.c b/WinQuake/model.c
-index 75501bd..57d2d9d 100644
+index 14c3b21..10e7dc5 100644
 --- a/WinQuake/model.c
 +++ b/WinQuake/model.c
-@@ -1254,6 +1254,7 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
+@@ -1270,6 +1270,7 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
  	Mod_LoadFaces (&header->lumps[LUMP_FACES]);
  	// the 3D hardware has its own copy of the geometry
  	R_BuildSurfaces (loadmodel);
@@ -79,7 +80,7 @@ index 75501bd..57d2d9d 100644
  	loadmodel->vertexes = NULL;
  	loadmodel->edges = NULL;
 diff --git a/WinQuake/model.h b/WinQuake/model.h
-index 7c398ba..52e4713 100644
+index fd6d138..ff93b9d 100644
 --- a/WinQuake/model.h
 +++ b/WinQuake/model.h
 @@ -340,6 +340,9 @@ typedef struct model_s
@@ -92,7 +93,7 @@ index 7c398ba..52e4713 100644
  
  	int			numedges;
  	medge_t		*edges;
-@@ -396,4 +399,7 @@ void	Mod_ReadLump (lump_t *l, int ofs, void *dest, int len);
+@@ -397,4 +400,7 @@ void	Mod_ReadLump (lump_t *l, int ofs, void *dest, int len);
  void	R_LoadTextures (texture_t **textures, int numtextures, lump_t *l);
  void	R_BuildSurfaces (model_t *mod);
  
@@ -158,10 +159,10 @@ index 0d163c2..2268be3 100644
 +// the key of the weapon at a 2D position, 0 for none
 diff --git a/WinQuake/sbar_nds.c b/WinQuake/sbar_nds.c
 new file mode 100644
-index 0000000..8a489a1
+index 0000000..33e1df3
 --- /dev/null
 +++ b/WinQuake/sbar_nds.c
-@@ -0,0 +1,925 @@
+@@ -0,0 +1,943 @@
 +/*
 +Copyright (C) 1996-1997 Id Software, Inc.
 +
@@ -554,6 +555,7 @@ index 0000000..8a489a1
 +	dtriangle_t	*tris;
 +	trivertx_t	*verts;
 +	int			mark, i, j, k, x, y, x0, x1, y0, y1, s, t, shade, ts[3], tt[3], smin, smax, tmin, tmax;
++	int			px[3], py[3], w[3], iarea;
 +	float		fs, ft;
 +	qboolean	viewmodel = !strncmp (name, "progs/v_", 8);
 +	float		*p[3];
@@ -677,15 +679,31 @@ index 0000000..8a489a1
 +		x1 = min (PIC_W - 1, (int) max (p[0][0], max (p[1][0], p[2][0])));
 +		y0 = max (0, (int) min (p[0][1], min (p[1][1], p[2][1])));
 +		y1 = min (PIC_H - 1, (int) max (p[0][1], max (p[1][1], p[2][1])));
++		// whether a pixel center is inside in 24.8 fixed point integers, the
++		// barycentric coordinates only for the ones that are
++		for (j = 0; j < 3; j++)
++		{
++			px[j] = p[j][0] * 256;
++			py[j] = p[j][1] * 256;
++		}
++		iarea = (px[1] - px[0]) * (py[2] - py[0]) - (py[1] - py[0]) * (px[2] - px[0]);
++		if (!iarea)
++			continue;
 +		for (y = y0; y <= y1; y++)
 +			for (x = x0; x <= x1; x++)
 +			{
-+				// the barycentric coordinates of the pixel center
-+				a = ((p[1][0] - x - 0.5) * (p[2][1] - y - 0.5) - (p[1][1] - y - 0.5) * (p[2][0] - x - 0.5)) / area;
-+				b = ((p[2][0] - x - 0.5) * (p[0][1] - y - 0.5) - (p[2][1] - y - 0.5) * (p[0][0] - x - 0.5)) / area;
-+				c = 1 - a - b;
-+				if (a < 0 || b < 0 || c < 0)
++				for (j = 0; j < 3; j++)
++				{
++					int	m = j == 2 ? 0 : j + 1, n = j == 0 ? 2 : j - 1;
++
++					w[j] = (px[m] - 256 * x - 128) * (py[n] - 256 * y - 128) -
++						(py[m] - 256 * y - 128) * (px[n] - 256 * x - 128);
++				}
++				if (iarea > 0 ? w[0] < 0 || w[1] < 0 || w[2] < 0 : w[0] > 0 || w[1] > 0 || w[2] > 0)
 +					continue;
++				a = (float) w[0] / iarea;
++				b = (float) w[1] / iarea;
++				c = 1 - a - b;
 +				k = y * PIC_W + x;
 +				if (a * p[0][2] + b * p[1][2] + c * p[2][2] >= zbuf[k])
 +					continue;
@@ -825,8 +843,9 @@ index 0000000..8a489a1
 +	Sbar_TimeString (str[2]);
 +	for (i = 0, y = SCORES_Y; i < 3; i++, y += 26)
 +	{
-+		Sbar_MapString (152 - strlen (labels[i]) * 8, y + 8, labels[i], 128);
-+		Sbar_IntermissionString (164, y, str[i]);
++		// like the intermission, where 999/999 just fits
++		Sbar_MapString (148 - strlen (labels[i]) * 8, y + 8, labels[i], 128);
++		Sbar_IntermissionString (160, y, str[i]);
 +	}
 +	if (Sbar_ScoresShown () == 2)
 +		Sbar_MapString ((vid.width - 20 * 8) / 2, y + 4, "PRESS A TO TRY AGAIN", 0);

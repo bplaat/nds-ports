@@ -29,8 +29,8 @@ rate.
 ---
  WinQuake/draw.c    |   8 +
  WinQuake/vid.h     |   8 +
- WinQuake/vid_nds.c | 590 +++++++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 606 insertions(+)
+ WinQuake/vid_nds.c | 595 +++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 611 insertions(+)
  create mode 100644 WinQuake/vid_nds.c
 
 diff --git a/WinQuake/draw.c b/WinQuake/draw.c
@@ -129,10 +129,10 @@ index eeb4139..2f35961 100644
  // the menu draws between them on a transparent background (255), it shows on
 diff --git a/WinQuake/vid_nds.c b/WinQuake/vid_nds.c
 new file mode 100644
-index 0000000..c5db4e0
+index 0000000..fe51bc5
 --- /dev/null
 +++ b/WinQuake/vid_nds.c
-@@ -0,0 +1,590 @@
+@@ -0,0 +1,595 @@
 +/*
 +Copyright (C) 1996-1997 Id Software, Inc.
 +
@@ -220,6 +220,9 @@ index 0000000..c5db4e0
 +static u16		palette[256] __attribute__((aligned(4)));
 +static u16		texpalette[256] __attribute__((aligned(4)));	// twice as bright
 +static volatile qboolean	palette_dirty;
++// For VID_VBlank to copy the palettes, the compiler mustn't move the stores
++// to them past it
++#define	PALETTE_CHANGED()	do { __asm__ volatile ("" ::: "memory"); palette_dirty = true; } while (0)
 +static int		smoothing = -1;
 +static byte		screengamma[256];
 +
@@ -252,14 +255,16 @@ index 0000000..c5db4e0
 +	// A CPU copy, DMA would miss palette writes still in the data cache
 +	if (palette_dirty)
 +	{
++		// first the texture palette, the 3D engine starts drawing the next
++		// frame 22 lines into the vertical blank
++		vramSetBankG (VRAM_G_LCD);
++		memcpy (VRAM_G, texpalette, sizeof(texpalette));
++		vramSetBankG (VRAM_G_TEX_PALETTE_SLOT0);
 +		memcpy (BG_PALETTE, palette, sizeof(palette));
 +		BG_PALETTE[255] = 0;
 +		// the text console of the startup has its own
 +		if (touchscreen)
 +			memcpy (BG_PALETTE_SUB, palette, sizeof(palette));
-+		vramSetBankG (VRAM_G_LCD);
-+		memcpy (VRAM_G, texpalette, sizeof(texpalette));
-+		vramSetBankG (VRAM_G_TEX_PALETTE_SLOT0);
 +		palette_dirty = false;
 +	}
 +	// Writing the reference point of an affine layer while the screen is
@@ -404,7 +409,7 @@ index 0000000..c5db4e0
 +		palette[i] = d_8to16table[i] = RGB15(r >> 3, g >> 3, b >> 3);	// for the particles too
 +		texpalette[i] = RGB15(min (r >> 2, 31), min (g >> 2, 31), min (b >> 2, 31));
 +	}
-+	palette_dirty = true;
++	PALETTE_CHANGED ();
 +}
 +
 +void VID_ShiftPalette (unsigned char *pal)
@@ -505,7 +510,7 @@ index 0000000..c5db4e0
 +			bgSetScrollf (sub, SCALE_X / 2, SCALE_Y / 2);
 +	}
 +	touchscreen = true;
-+	palette_dirty = true;
++	PALETTE_CHANGED ();
 +	VID_SetLayers ();
 +	memset (copyrows, 1, sizeof(copyrows));
 +	ui_overdrawn = true;	// the touch screen draws all of it again

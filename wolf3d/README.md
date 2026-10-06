@@ -198,3 +198,6 @@ it uses, in `nds/`, so its own code is barely changed.
 - [0021](patches/0021-Copy-memory-fast-on-the-DS.patch): `mem.c` replaces
   newlib's `memcpy` and `memset`, which copy a byte at a time in Thumb mode,
   with word copies from ITCM.
+- [0022](patches/0022-Use-single-precision-and-reduce-floating-point-work.patch):
+  Use single-precision trig, projection and AdLib tables; share the
+  direction-to-angle conversion and replace its division with multiplication.
