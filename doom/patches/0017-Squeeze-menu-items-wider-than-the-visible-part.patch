@@ -12,10 +12,10 @@ items wider than the visible part of the screen are squeezed into it.
  3 files changed, 58 insertions(+), 1 deletion(-)
 
 diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
-index f0588f2..e465f04 100644
+index 385018c..d63b2bb 100644
 --- a/doomgeneric/m_menu.c
 +++ b/doomgeneric/m_menu.c
-@@ -2101,7 +2101,13 @@ void M_Drawer (void)
+@@ -2102,7 +2102,13 @@ void M_Drawer (void)
  
  	if (name[0])
  	{

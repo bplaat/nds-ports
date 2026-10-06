@@ -61,7 +61,8 @@ Every `.wad` found is listed in a picker that shows each game's title screen.
 IWADs are games, other WADs are mods (PWADs) and start on a matching IWAD:
 DOOM II for MAPxx mods, DOOM for ExMy mods (the shareware can't load mods).
 
-With an SD card the config goes to `/data/doom/` and savegames to
+With an SD card the settings go to `/data/doom/default.cfg` as soon as the menu
+closes, and savegames to
 `/data/doom/saves/<game>/doomsav0.dsg` and up, in Doom's own savegame format,
 a mod keeps its own in `saves/<mod>.wad/`. Without one you can still play,
 saving then shows a message instead. Extra command line options such as
@@ -111,21 +112,24 @@ code is written for the DS only, without `__NDS__` checks.
 - [0009](patches/0009-Keep-savegames-per-game-in-saves-iwad.patch):
   Savegames go to `saves/<iwad>/`, so games don't overwrite each other's
   slots.
+- [0010](patches/0010-Keep-the-settings-in-default.cfg.patch): The config
+  files, which doomgeneric never read or wrote, keep the settings again,
+  written whenever the menu closes.
 
 ### Rendering
 
-- [0010](patches/0010-Use-the-DS-hardware-divider.patch): The ARM9 has no
+- [0011](patches/0011-Use-the-DS-hardware-divider.patch): The ARM9 has no
   divide instruction, `FixedDiv`, `SlopeDiv` and the scale of every wall
   column use the DS hardware divider. A wall column's division runs while the
   column is set up, and `SlopeDiv` divides 32 bits when it can, which takes
   half as long as 64.
-- [0011](patches/0011-Keep-Doom-s-proportions-on-square-pixels.patch):
+- [0012](patches/0012-Keep-Doom-s-proportions-on-square-pixels.patch):
   Doom's 320x200 had pixels 1.2 times taller than wide on a 4:3 monitor, so on
   the square pixels of the DS the vertical projection is 1.2 times the
   horizontal one (`R_PIXELASPECT`). Walls, sprites, the weapon, floors and the
   sky keep their proportions with the same 90 degree field of view, without
   cropping or stretching.
-- [0012](patches/0012-Fill-the-DS-top-screen-with-the-view.patch): The
+- [0013](patches/0013-Fill-the-DS-top-screen-with-the-view.patch): The
   view fills the 256x192 top screen at high detail, without status bar or
   border, the rest of the 320x200 frame is black.
 
@@ -133,18 +137,18 @@ code is written for the DS only, without `__NDS__` checks.
 
 The top screen shows the middle 256x192 of Doom's 320x200 frame 1:1.
 
-- [0013](patches/0013-Draw-menus-and-messages-in-the-visible-part-of-the-s.patch):
+- [0014](patches/0014-Draw-menus-and-messages-in-the-visible-part-of-the-s.patch):
   `V_VISIBLE*` describe that part, messages go in its corner and the menus
   are moved inside it, every page centered vertically: it is drawn once
   only measuring it, then moved down.
-- [0014](patches/0014-Scale-frames-with-a-picture-for-the-whole-screen.patch):
+- [0015](patches/0015-Scale-frames-with-a-picture-for-the-whole-screen.patch):
   Frames with a picture made for the whole screen (title, credits, the
   intermission maps, end pictures) set `v_fullscreenpicture` and are shown
   scaled instead. A wipe between such a frame and the view scales the
   picture into the visible part and runs at 1:1, without jumping.
-- [0015](patches/0015-Wrap-texts-at-words-in-the-visible-part-of-the-scree.patch):
+- [0016](patches/0016-Wrap-texts-at-words-in-the-visible-part-of-the-scree.patch):
   HUD messages, menu messages and finale texts wrap at words.
-- [0016](patches/0016-Squeeze-menu-items-wider-than-the-visible-part.patch):
+- [0017](patches/0017-Squeeze-menu-items-wider-than-the-visible-part.patch):
   The three menu items wider than the visible part are squeezed into it.
 
 ### Speed
@@ -153,57 +157,57 @@ The ARM9 runs at 67 MHz, with 32 KiB of ITCM for code and 16 KiB of DTCM
 for data at full speed, 8 KiB instruction and 4 KiB data caches, and 4 MiB
 of main RAM on a 16-bit bus at half its clock.
 
-- [0017](patches/0017-Speed-up-the-column-and-span-drawers.patch): The
+- [0018](patches/0018-Speed-up-the-column-and-span-drawers.patch): The
   drawers keep their tables in registers, the column drawer draws four
   pixels at a time with a free texture wrap and the span drawer stores four
   pixels as one word.
-- [0018](patches/0018-Keep-the-light-tables-in-DTCM.patch): The colormaps,
+- [0019](patches/0019-Keep-the-light-tables-in-DTCM.patch): The colormaps,
   read for every pixel, live in DTCM.
-- [0019](patches/0019-Run-hot-functions-from-ITCM.patch): `HOT_CODE` puts
+- [0020](patches/0020-Run-hot-functions-from-ITCM.patch): `HOT_CODE` puts
   single functions in ITCM as ARM code: the automap's line drawing and
   `SlopeDiv`, and in the platform the touch screen's patch drawer and the
   DMA interrupt. The build puts whole files there (0021).
 
 ### The DS platform
 
-- [0020](patches/0020-Read-response-files.patch): Response files work
+- [0021](patches/0021-Read-response-files.patch): Response files work
   again, for the options in `/data/doom/args.txt`.
-- [0021](patches/0021-Add-a-Nintendo-DS-build.patch): `Makefile.nds` builds
+- [0022](patches/0022-Add-a-Nintendo-DS-build.patch): `Makefile.nds` builds
   a DSi enhanced `.nds` with devkitARM and libnds/calico, without the 32-bit
   `DG_ScreenBuffer` and SDL_mixer. The renderer, sight checks, fixed point
   math and `memcpy`/`memset` run from ITCM as ARM code, which is nearly full,
   the rest is Thumb code in main RAM.
-- [0022](patches/0022-Add-the-DS-game-picker.patch): `doomgeneric_nds.c`
+- [0023](patches/0023-Add-the-DS-game-picker.patch): `doomgeneric_nds.c`
   switches the ARM9 to 134 MHz in DSi mode, finds every IWAD and mod in
   NitroFS and on the SD card, shows them in a picker with each game's title
   picture, shows a loading screen and keeps config and saves in
   `/data/doom/`. Doom runs in a thread with its stack in main RAM, DTCM
   mostly holds the colormaps. Also the doomgeneric timing interface.
-- [0023](patches/0023-Keep-the-savegames-of-a-mod-apart-from-its-IWAD-s.patch):
+- [0024](patches/0024-Keep-the-savegames-of-a-mod-apart-from-its-IWAD-s.patch):
   A mod gets its own savegame directory.
-- [0024](patches/0024-Fit-the-system-layer-to-the-DS.patch): The zone
+- [0025](patches/0025-Fit-the-system-layer-to-the-DS.patch): The zone
   takes all free RAM (4 MiB on the DS, 16 MiB on the DSi), `I_Quit` returns to
   the homebrew launcher, `I_Error` shows the message on the touch screen and
   the startup banner fits the 32 column console.
-- [0025](patches/0025-Add-DS-video.patch): `i_ndsvideo.c` page flips two
+- [0026](patches/0026-Add-DS-video.patch): `i_ndsvideo.c` page flips two
   8bpp VRAM backgrounds on vblank. DMA copies each frame there while the game
   runs its next tic, a row at a time chained by interrupts. Scaled frames use
   the affine background hardware, smoothed by a second layer half a pixel
   further that is alpha blended on top. Doom's palette lives in the hardware
   palette, so damage and pickup flashes cost nothing.
-- [0026](patches/0026-Add-DS-buttons.patch): `i_ndsinput.c` maps the
+- [0027](patches/0027-Add-DS-buttons.patch): `i_ndsinput.c` maps the
   buttons to game keys while playing and to menu keys in the menus.
-- [0027](patches/0027-Add-the-DS-touch-screen.patch): `i_ndstouch.c` draws
+- [0028](patches/0028-Add-the-DS-touch-screen.patch): `i_ndstouch.c` draws
   the status bar, automap and weapon cells from the WAD's own graphics, copies
   them to VRAM by DMA and selects a weapon when its cell is tapped. It keeps
   copies of the lumps it draws, Doom makes cached lumps purgeable again when
   it uses them itself.
-- [0028](patches/0028-Add-DS-music.patch): `i_ndsmusic.c` plays MUS and
+- [0029](patches/0029-Add-DS-music.patch): `i_ndsmusic.c` plays MUS and
   MIDI on a wavetable synth on hardware channels 8-15, with waveforms per
   instrument family and synthesized drums, sequenced by a 140 Hz thread.
-- [0029](patches/0029-Add-DS-sound-effects.patch): `i_ndssound.c` plays
+- [0030](patches/0030-Add-DS-sound-effects.patch): `i_ndssound.c` plays
   sound effects on hardware channels 0-7, which do the resampling, volume and
   stereo panning.
-- [0030](patches/0030-Copy-memory-fast-on-the-DS.patch): `mem_nds.c`
+- [0031](patches/0031-Copy-memory-fast-on-the-DS.patch): `mem_nds.c`
   replaces newlib's `memcpy` and `memset`, which copy a byte at a time in
   Thumb mode, with word copies from ITCM.

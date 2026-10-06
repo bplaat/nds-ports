@@ -15,18 +15,18 @@ thread with a 64 KiB stack in main RAM: DTCM is mostly taken by the
 light tables, and Doom's deepest recursion grows with the size of a map.
 Also the doomgeneric interface: timing from the calico tick counter.
 ---
- doomgeneric/doomgeneric_nds.c | 644 ++++++++++++++++++++++++++++++++++
+ doomgeneric/doomgeneric_nds.c | 652 ++++++++++++++++++++++++++++++++++
  doomgeneric/doomgeneric_nds.h |  31 ++
- 2 files changed, 675 insertions(+)
+ 2 files changed, 683 insertions(+)
  create mode 100644 doomgeneric/doomgeneric_nds.c
  create mode 100644 doomgeneric/doomgeneric_nds.h
 
 diff --git a/doomgeneric/doomgeneric_nds.c b/doomgeneric/doomgeneric_nds.c
 new file mode 100644
-index 0000000..1b98bac
+index 0000000..066921d
 --- /dev/null
 +++ b/doomgeneric/doomgeneric_nds.c
-@@ -0,0 +1,644 @@
+@@ -0,0 +1,652 @@
 +//
 +// Nintendo DS platform layer for doomgeneric
 +//
@@ -93,17 +93,26 @@ index 0000000..1b98bac
 +static PrintConsole console;
 +
 +// Doom's startup log is far too wide for the 32 column console, so while
-+// loading every log line only prints a progress dot
++// loading every log line only prints a progress dot, in rows with the same
++// two columns of margin on both sides as the text
++#define LOADING_DOTS 28
++
 +static const devoptab_t *console_out;
 +static devoptab_t loading_out;
 +
 +static ssize_t LoadingWrite(struct _reent *r, void *fd, const char *ptr, size_t len)
 +{
++    static int dots;
 +    size_t i;
 +
 +    for (i = 0; i < len; ++i)
 +        if (ptr[i] == '\n')
++        {
++            if (dots && dots % LOADING_DOTS == 0)
++                console_out->write_r(r, fd, "\n  ", 3);
 +            console_out->write_r(r, fd, ".", 1);
++            ++dots;
++        }
 +    return len;
 +}
 +
@@ -655,7 +664,6 @@ index 0000000..1b98bac
 +        doom_argv[doom_argc++] = (char *) wad->path;
 +    }
 +    PrintHeader();
-+    printf("\n");
 +    EnterDataDir();
 +    printf("\n  Loading %s\n\n  ", wad->title);
 +    fflush(stdout);

@@ -742,10 +742,10 @@ index 0000000..d8fec07
 +    }
 +}
 diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
-index e465f04..f6f886b 100644
+index d63b2bb..54e2c62 100644
 --- a/doomgeneric/m_menu.c
 +++ b/doomgeneric/m_menu.c
-@@ -916,6 +916,12 @@ void M_DrawMainMenu(void)
+@@ -917,6 +917,12 @@ void M_DrawMainMenu(void)
                        W_CacheLumpName(DEH_String("M_DOOM"), PU_CACHE));
  }
  
