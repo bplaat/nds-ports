@@ -9,10 +9,9 @@ with the level name, time and the keys, powerups and runes you carry,
 the kills and secrets as percentages, centered, and at the bottom a cell
 for each weapon, dark and without ammo until you have it, flashing when
 picked up, the one in hand in a yellow frame. A tap on a cell selects
-the weapon. When you are dead or hold the scores button the map makes
-way for the kills, secrets and time in the big numbers of the
-intermission, and how to try again, instead of the scoreboard over the
-status bar, which shows no health below 0. The time stops when you die. While the menu is open the touch screen keeps showing the
+the weapon. When you are dead the map makes way for the kills, secrets
+and time in the big numbers of the intermission, and how to try again,
+instead of the scoreboard over the status bar, which shows no health below 0. The time stops when you die. While the menu is open the touch screen keeps showing the
 game, with the options and while no game runs behind the menu it shows
 the controls, in a dark inset in the middle of the console background.
 
@@ -33,9 +32,9 @@ when it changes.
  WinQuake/model.h    |   6 +
  WinQuake/sbar.c     |  15 +-
  WinQuake/sbar.h     |   8 +
- WinQuake/sbar_nds.c | 940 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ WinQuake/sbar_nds.c | 938 ++++++++++++++++++++++++++++++++++++++++++++
  WinQuake/screen.c   |   2 +
- 8 files changed, 970 insertions(+), 9 deletions(-)
+ 8 files changed, 968 insertions(+), 9 deletions(-)
  create mode 100644 WinQuake/sbar_nds.c
 
 diff --git a/WinQuake/menu.c b/WinQuake/menu.c
@@ -159,10 +158,10 @@ index 0d163c2..2268be3 100644
 +// the key of the weapon at a 2D position, 0 for none
 diff --git a/WinQuake/sbar_nds.c b/WinQuake/sbar_nds.c
 new file mode 100644
-index 0000000..6344000
+index 0000000..1bf43ff
 --- /dev/null
 +++ b/WinQuake/sbar_nds.c
-@@ -0,0 +1,940 @@
+@@ -0,0 +1,938 @@
 +/*
 +Copyright (C) 1996-1997 Id Software, Inc.
 +
@@ -286,7 +285,7 @@ index 0000000..6344000
 +extern qpic_t	*sb_items[32];
 +extern qpic_t	*sb_sigil[4];
 +
-+extern qboolean	scr_drawdialog, sb_showscores;
++extern qboolean	scr_drawdialog;
 +
 +static qboolean	panelsshown, controlsshown;
 +static byte			darktable[256], brighttable[256];	// the weapons you don't have, a new one
@@ -820,11 +819,11 @@ index 0000000..6344000
 +			Draw_TransPic (x -= 18, TITLE_Y + 10, sb_items[i]);
 +}
 +
-+// When you are dead or hold the scores button, the map makes way for the
-+// kills, secrets and time in the big numbers of the intermission
-+static int Sbar_ScoresShown (void)
++// When you are dead, the map makes way for the kills, secrets and time in
++// the big numbers of the intermission
++static qboolean Sbar_ScoresShown (void)
 +{
-+	return cl.stats[STAT_HEALTH] <= 0 ? 2 : sb_showscores ? 1 : 0;
++	return cl.stats[STAT_HEALTH] <= 0;
 +}
 +
 +static void Sbar_DrawScores (void)
@@ -844,8 +843,7 @@ index 0000000..6344000
 +		Sbar_MapString (148 - strlen (labels[i]) * 8, y + 8, labels[i], 128);
 +		Sbar_IntermissionString (160, y, str[i]);
 +	}
-+	if (Sbar_ScoresShown () == 2)
-+		Sbar_MapString ((vid.width - 20 * 8) / 2, y + 4, "PRESS A TO TRY AGAIN", 0);
++	Sbar_MapString ((vid.width - 20 * 8) / 2, y + 4, "PRESS A TO TRY AGAIN", 0);
 +}
 +
 +// What the stats show, they are redrawn when it changes
@@ -1001,7 +999,6 @@ index 0000000..6344000
 +	{"Y", "RUN (HOLD)"},
 +	{"L R", "STRAFE"},
 +	{"START", "MENU"},
-+	{"SELECT", "SCORES"},
 +	{"STYLUS", "TAP A WEAPON"},
 +};
 +
@@ -1107,7 +1104,7 @@ diff --git a/WinQuake/screen.c b/WinQuake/screen.c
 index f0010e0..c2facaf 100644
 --- a/WinQuake/screen.c
 +++ b/WinQuake/screen.c
-@@ -939,6 +939,7 @@ void SCR_UpdateScreen (void)
+@@ -938,6 +938,7 @@ void SCR_UpdateScreen (void)
  
  	if (scr_drawdialog)
  	{
@@ -1115,7 +1112,7 @@ index f0010e0..c2facaf 100644
  		// on the top screen like the menu
  		VID_BeginMenu ();
  		SCR_DrawNotifyString ();
-@@ -970,6 +971,7 @@ void SCR_UpdateScreen (void)
+@@ -969,6 +970,7 @@ void SCR_UpdateScreen (void)
  		SCR_DrawTurtle ();
  		SCR_DrawPause ();
  		SCR_CheckDrawCenterString ();

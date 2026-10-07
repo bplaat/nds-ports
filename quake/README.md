@@ -14,7 +14,6 @@ A port of id Software's [GPL Quake source](https://github.com/id-Software/Quake)
 | Y      | Run (hold)    |              |
 | L / R  | Strafe        |              |
 | START  | Menu          | Close menu   |
-| SELECT | Scores        |              |
 | Stylus | Tap a weapon  |              |
 
 The top screen shows the 3D view, with the messages and center prints over
@@ -23,7 +22,7 @@ the middle, following you, with the level name, time, the keys, powerups and
 runes you carry and the kills and secrets as percentages, and at the bottom a
 cell for each weapon, drawn from its model, with its ammo, dark until you have
 it, the one in your hands in a yellow frame. Tap a weapon to select it. When
-you die, or hold SELECT, the map makes way for the kills, secrets and time.
+you die, the map makes way for the kills, secrets and time.
 
 The game starts in the main menu, which is on the top screen over the demos.
 The main menu has New Game, Load, Save, Options and Quit, which in a game ends
