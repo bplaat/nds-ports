@@ -1,0 +1,177 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Build with newlib and GCC 16
+
+newlib has no sys/uio.h and its machine/_time.h pulls in stdbool.h, so
+the SCRIPT_GetBoolean and SCRIPT_PutBoolean parameters named bool are
+renamed. filelength() is built everywhere but on Windows, global.h gets
+BYTE_ORDER from sys/types.h, strlwr, strupr and itoa come from newlib,
+and files in the game directory are opened with a forward slash, which
+works on every platform.
+---
+ Engine/src/filesystem.c  |  4 ++--
+ Engine/src/filesystem.h  |  2 +-
+ Engine/src/unix_compat.h |  1 -
+ Game/src/global.c        | 41 ----------------------------------------
+ Game/src/global.h        |  2 ++
+ Game/src/scriplib.c      |  4 ++--
+ Game/src/scriplib.h      |  4 ++--
+ 7 files changed, 9 insertions(+), 49 deletions(-)
+
+diff --git a/Engine/src/filesystem.c b/Engine/src/filesystem.c
+index 4365d99..f7166ee 100644
+--- a/Engine/src/filesystem.c
++++ b/Engine/src/filesystem.c
+@@ -405,7 +405,7 @@ int32_t klseek(int32_t handle, int32_t offset, int whence){
+ 	
+ }
+ 
+-#if defined(__APPLE__) || defined(__linux__)
++#ifndef _WIN32
+ int32_t filelength(int32_t fd){
+     struct stat stats;
+     fstat(fd, &stats);
+@@ -705,7 +705,7 @@ int32_t TCkopen4load(const char  *filename, int readfromGRP)
+     
+ 	if(game_dir[0] != '\0' && !readfromGRP)
+ 	{
+-		sprintf(fullfilename, "%s\\%s", game_dir, filename);
++		sprintf(fullfilename, "%s/%s", game_dir, filename);
+ 		if (!SafeFileExists(fullfilename)) // try root
+ 			sprintf(fullfilename, "%s", filename);
+ 	}
+diff --git a/Engine/src/filesystem.h b/Engine/src/filesystem.h
+index 59e0e9e..55f1a5e 100644
+--- a/Engine/src/filesystem.h
++++ b/Engine/src/filesystem.h
+@@ -42,7 +42,7 @@ void     setGameDir(char* gameDir);
+ 
+ int32_t  TCkopen4load(const char  *filename, int32_t readfromGRP);
+ 
+-#if defined(__APPLE__) || defined(__linux__)
++#ifndef _WIN32
+ int32_t  filelength(int32_t fd);
+ #endif
+ 
+diff --git a/Engine/src/unix_compat.h b/Engine/src/unix_compat.h
+index 811e99e..b1c3251 100644
+--- a/Engine/src/unix_compat.h
++++ b/Engine/src/unix_compat.h
+@@ -56,7 +56,6 @@
+ #include <assert.h>
+ #include <sys/types.h>
+ #include <sys/stat.h>
+-#include <sys/uio.h>
+ #include <unistd.h>
+ #include <fcntl.h>
+ #include <dirent.h>
+diff --git a/Game/src/global.c b/Game/src/global.c
+index ddbdb1a..ad961ec 100644
+--- a/Game/src/global.c
++++ b/Game/src/global.c
+@@ -781,47 +781,6 @@ void SwapIntelShortArray(short *s, int num)
+  */
+  
+ #if PLATFORM_UNIX
+-uint8_t  *strlwr(uint8_t  *s)
+-{
+-	uint8_t  *p = s;
+-	
+-	while (*p) {
+-		*p = tolower(*p);
+-		p++;
+-	}
+-	
+-	return s;
+-}
+-
+-uint8_t  *strupr(uint8_t  *s)
+-{
+-	uint8_t  *p = s;
+-	
+-	while (*p) {
+-		*p = toupper(*p);
+-		p++;
+-	}
+-	
+-	return s;
+-}
+-	
+-uint8_t  *itoa(int value, uint8_t  *string, int radix)
+-{
+-	switch (radix) {
+-		case 10:
+-			sprintf(string, "%d", value);
+-			break;
+-		case 16:
+-			sprintf(string, "%x", value);
+-			break;
+-		default:
+-			STUBBED("unknown radix");
+-			break;
+-	}
+-	
+-	return string;
+-}
+-
+ uint8_t  *ltoa(int32_t value, uint8_t  *string, int radix)
+ {
+ 	switch (radix) {
+diff --git a/Game/src/global.h b/Game/src/global.h
+index 62b69f0..01a936b 100644
+--- a/Game/src/global.h
++++ b/Game/src/global.h
+@@ -13,6 +13,8 @@ void FixFilePath(char  *filename);
+ int FindDistance3D(int ix, int iy, int iz);
+ void Shutdown(void);
+ 
++#include <sys/types.h>
++
+ #ifndef LITTLE_ENDIAN
+     #ifdef __APPLE__
+     #else
+diff --git a/Game/src/scriplib.c b/Game/src/scriplib.c
+index f77b9df..4164c22 100644
+--- a/Game/src/scriplib.c
++++ b/Game/src/scriplib.c
+@@ -724,7 +724,7 @@ void SCRIPT_GetBoolean
+    int32 scripthandle,
+    uint8_t  * sectionname,
+    uint8_t  * entryname,
+-   boolean * bool
++   boolean * value
+    )
+ {
+ 	STUBBED("GetBoolean");
+@@ -1035,7 +1035,7 @@ void SCRIPT_PutBoolean
+    int32 scripthandle,
+    uint8_t  * sectionname,
+    uint8_t  * entryname,
+-   boolean bool
++   boolean value
+    )
+ {
+ 	STUBBED("PutBoolean");
+diff --git a/Game/src/scriplib.h b/Game/src/scriplib.h
+index e6b647f..d6dcb77 100644
+--- a/Game/src/scriplib.h
++++ b/Game/src/scriplib.h
+@@ -190,7 +190,7 @@ void SCRIPT_GetBoolean
+    int32 scripthandle,
+    uint8_t  * sectionname,
+    uint8_t  * entryname,
+-   boolean * bool
++   boolean * value
+    );
+ 
+ /*
+@@ -345,7 +345,7 @@ void SCRIPT_PutBoolean
+    int32 scripthandle,
+    uint8_t  * sectionname,
+    uint8_t  * entryname,
+-   boolean bool
++   boolean value
+    );
+ 
+ /*

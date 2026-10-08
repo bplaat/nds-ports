@@ -1,0 +1,403 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Add the DS touch screen
+
+The view fills the top screen. hud_nds.c has the game draw the touch
+screen: weapon cells with their pickup pictures and ammo, the overhead
+map and the game's own status bar, drawn as if the view were small. Only
+what changed is drawn again and copied to VRAM. Tapping a weapon selects
+it, the inventory box uses the item, the map zooms. Outside of a level
+and in the menus the touch screen shows the controls.
+---
+ Game/src/config.c |   6 +-
+ nds/hud_nds.c     | 349 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 350 insertions(+), 5 deletions(-)
+ create mode 100644 nds/hud_nds.c
+
+diff --git a/Game/src/config.c b/Game/src/config.c
+index 24eb98c..556e124 100644
+--- a/Game/src/config.c
++++ b/Game/src/config.c
+@@ -231,7 +231,7 @@ void CONFIG_SetDefaults( void )
+ 
+    // game
+    ps[0].aim_mode = 0;
+-   ud.screen_size = 8;
++   ud.screen_size = 0;
+    ud.extended_screen_size = 0;
+    ud.screen_tilting = 1;
+    ud.brightness = 16;
+@@ -656,8 +656,6 @@ void CONFIG_ReadSetup( void )
+    SCRIPT_GetNumber( scripthandle, "Screen Setup", "ScreenHeight",&ScreenHeight);
+    // SCRIPT_GetNumber( scripthandle, "Screen Setup", "ScreenMode",&ScreenMode);
+    SCRIPT_GetNumber( scripthandle, "Screen Setup", "ScreenGamma",&ud.brightness);
+-   SCRIPT_GetNumber( scripthandle, "Screen Setup", "ScreenSize",&ud.screen_size);
+-   SCRIPT_GetNumber( scripthandle, "Screen Setup", "ExtScreenSize",&ud.extended_screen_size);
+    SCRIPT_GetNumber( scripthandle, "Screen Setup", "Out",&ud.lockout);
+    SCRIPT_GetNumber( scripthandle, "Screen Setup", "ShowFPS",&ud.tickrate);
+    ud.tickrate &= 1;
+@@ -823,8 +821,6 @@ void CONFIG_WriteSetup( void )
+    SCRIPT_PutNumber( scripthandle, "Sound Setup", "OpponentSoundToggle",OpponentSoundToggle,false,false);
+    SCRIPT_PutNumber( scripthandle, "Sound Setup", "MusicToggle",MusicToggle,false,false);
+    SCRIPT_PutNumber( scripthandle, "Sound Setup", "ReverseStereo",ReverseStereo,false,false);
+-   SCRIPT_PutNumber( scripthandle, "Screen Setup", "ScreenSize",ud.screen_size,false,false);
+-   SCRIPT_PutNumber( scripthandle, "Screen Setup", "ExtScreenSize",ud.extended_screen_size,false,false);
+    SCRIPT_PutNumber( scripthandle, "Screen Setup", "ScreenGamma",ud.brightness,false,false);
+    SCRIPT_PutNumber( scripthandle, "Misc", "Executions",ud.executions,false,false);
+    SCRIPT_PutNumber( scripthandle, "Misc", "RunMode",ud.auto_run,false,false);
+diff --git a/nds/hud_nds.c b/nds/hud_nds.c
+new file mode 100644
+index 0000000..98939f9
+--- /dev/null
++++ b/nds/hud_nds.c
+@@ -0,0 +1,349 @@
++//
++// Nintendo DS touch screen
++//
++// The game draws the touch screen itself, into a frame of its own in main
++// RAM that DMA copies to an 8bpp bitmap in VRAM banks H and I. Outside of a
++// level and while a menu is open it shows the controls. Playing, it has at the top a
++// cell per weapon with its pickup picture and ammo, below that the overhead
++// map following you, and at the bottom the game's own status bar, drawn by
++// the game as if the view were small. Tapping a weapon selects it, tapping
++// the inventory box of the status bar uses the item in it and tapping the
++// map zooms it.
++//
++
++#include <nds.h>
++#include <limits.h>
++
++#include "duke3d.h"
++#include "display.h"
++
++#include "duke3d_nds.h"
++
++#define HUD_W           NDS_SCREEN_W
++#define HUD_H           NDS_SCREEN_H
++
++#define CELLS_H         34
++#define CELL_W          (HUD_W / 10)
++#define MAP_Y           CELLS_H
++#define MAP_H           125
++#define BAR_Y           (MAP_Y + MAP_H)
++
++// The map is drawn again after at least MIN frames if the view moved, else
++// after MAX frames
++#define MAP_MIN_FRAMES  3
++#define MAP_MAX_FRAMES  30
++
++
++// The status bar's inventory box, in 320x200 coordinates
++#define INVENTORY_X1    231
++#define INVENTORY_X2    268
++
++extern uint8_t britable[16][64];
++
++static uint8_t hud[HUD_W * HUD_H] __attribute__((aligned(32)));
++static int shown_brightness;
++static uint8_t cell_color, current_color, cell_back;
++
++// What the touch screen shows, the console while the game starts
++static enum { SHOW_CONSOLE, SHOW_CONTROLS, SHOW_HUD } showing;
++static int map_zoom = 384;
++
++// Weapons in slot order (1..9, 0) and their pickup pictures
++static const struct
++{
++    int weapon;
++    int picnum;
++} weapon_cells[10] =
++{
++    { KNEE_WEAPON,       KNEE },
++    { PISTOL_WEAPON,     FIRSTGUNSPRITE },
++    { SHOTGUN_WEAPON,    SHOTGUNSPRITE },
++    { CHAINGUN_WEAPON,   CHAINGUNSPRITE },
++    { RPG_WEAPON,        RPGSPRITE },
++    { HANDBOMB_WEAPON,   HEAVYHBOMB },
++    { SHRINKER_WEAPON,   SHRINKERSPRITE },
++    { DEVISTATOR_WEAPON, DEVISTATORSPRITE },
++    { TRIPBOMB_WEAPON,   TRIPBOMBSPRITE },
++    { FREEZE_WEAPON,     FREEZESPRITE },
++};
++
++// What the weapon cells show, to only draw them again when it changes
++typedef struct
++{
++    int curr_weapon;
++    short gotweapon[10];
++    short ammo[10];
++} cells_state_t;
++
++static cells_state_t cells_shown;
++
++// The map's rows, swapped in for the screen's
++static short map_umost[HUD_W], map_dmost[HUD_W], saved_umost[HUD_W], saved_dmost[HUD_W];
++
++// The palette color nearest to a 6-bit RGB color
++static uint8_t ClosestColor(int r, int g, int b)
++{
++    int i, best = 0, best_dist = INT_MAX;
++
++    for (i = 0; i < 255; ++i)
++    {
++        int dr = palette[i * 3] - r, dg = palette[i * 3 + 1] - g, db = palette[i * 3 + 2] - b;
++        int dist = dr * dr + dg * dg + db * db;
++
++        if (dist < best_dist)
++        {
++            best = i;
++            best_dist = dist;
++        }
++    }
++    return best;
++}
++
++static const char *const controls[][2] =
++{
++    { "D-PAD",  "MOVE AND TURN" },
++    { "A",      "FIRE" },
++    { "B",      "OPEN AND USE" },
++    { "X",      "JUMP" },
++    { "Y",      "CROUCH" },
++    { "L R",    "STRAFE" },
++    { "SELECT", "USE ITEM" },
++    { "SEL+PAD", "LOOK, PICK ITEM" },
++    { "START",  "MENU" },
++    { "STYLUS", "WEAPONS, ITEM, MAP" },
++};
++
++// The controls, in the game's font at its own size
++static void DrawControls(void)
++{
++    unsigned i;
++
++    memset(hud, 0, sizeof(hud));
++    gametext(100, 10, "CONTROLS", 0, 8 + 16);
++    for (i = 0; i < sizeof(controls) / sizeof(controls[0]); ++i)
++    {
++        gametext(28, 30 + i * 14, (char *) controls[i][0], 0, 8 + 16);
++        gametext(100, 30 + i * 14, (char *) controls[i][1], 8, 8 + 16);
++    }
++    gametext(20, 172, "MENUS: A SELECTS, B GOES BACK", 16, 8 + 16);
++}
++
++// The plain palette at the brightness of the top screen, the damage and
++// pickup flashes stay up there
++static void SetSubPalette(void)
++{
++    const uint8_t *b = britable[curbrightness];
++    int i;
++
++    for (i = 0; i < 256; ++i)
++        BG_PALETTE_SUB[i] = RGB15(b[palette[i * 3]] >> 1, b[palette[i * 3 + 1]] >> 1, b[palette[i * 3 + 2]] >> 1);
++    shown_brightness = curbrightness;
++}
++
++static void InitSubScreen(void)
++{
++    int i;
++
++    NDS_QuietOutput();
++    videoSetModeSub(MODE_5_2D);
++    bgInitSub(3, BgType_Bmp8, BgSize_B8_256x256, 0, 0);
++    SetSubPalette();
++    cell_color = ClosestColor(20, 20, 22);
++    current_color = ClosestColor(63, 44, 0);
++    cell_back = ClosestColor(6, 6, 7);
++    for (i = 0; i < HUD_W; ++i)
++    {
++        map_umost[i] = MAP_Y;
++        map_dmost[i] = MAP_Y + MAP_H;
++    }
++}
++
++// Returns whether the cells changed
++static bool DrawWeaponCells(const struct player_struct *p)
++{
++    cells_state_t state;
++    int i;
++
++    memset(&state, 0, sizeof(state));
++    state.curr_weapon = p->curr_weapon;
++    for (i = 0; i < 10; ++i)
++    {
++        state.gotweapon[i] = p->gotweapon[weapon_cells[i].weapon];
++        state.ammo[i] = p->ammo_amount[weapon_cells[i].weapon];
++    }
++    if (!memcmp(&state, &cells_shown, sizeof(state)))
++        return false;
++    cells_shown = state;
++
++    for (i = 0; i < 10; ++i)
++    {
++        int w = weapon_cells[i].weapon, x = i * CELL_W + (i * (HUD_W % 10)) / 10;
++        int pic = weapon_cells[i].picnum, tw = tiles[pic].dim.width, th = tiles[pic].dim.height;
++        bool owned = w == KNEE_WEAPON || p->gotweapon[w];
++        bool current = p->curr_weapon == w || (w == HANDBOMB_WEAPON && p->curr_weapon == HANDREMOTE_WEAPON);
++        int y, z, cw = CELL_W - 2;
++        char text[8];
++
++        // A frame around the cell, bright for the weapon in hand
++        for (y = 0; y < CELLS_H; ++y)
++        {
++            uint8_t frame = current ? current_color : cell_color;
++
++            memset(hud + y * HUD_W + x, y == 0 || y == CELLS_H - 1 ? frame : cell_back, cw);
++            hud[y * HUD_W + x] = hud[y * HUD_W + x + cw - 1] = frame;
++        }
++
++        // The picture fitted into the cell, dark until you have the weapon
++        if (tw > 0 && th > 0)
++        {
++            z = min(divscale16(cw - 4, tw), divscale16(CELLS_H - 12, th));
++            if (z > 65536)
++                z = 65536;
++            rotatesprite((x + (cw - mulscale16(tw, z)) / 2) << 16, (2 + (CELLS_H - 12 - mulscale16(th, z)) / 2) << 16,
++                         z, 0, pic, owned ? 0 : 24, 0, 8 + 16, x + 1, 1, x + cw - 2, CELLS_H - 2);
++        }
++
++        sprintf(text, "%d", (i + 1) % 10);
++        minitext(x + 2, CELLS_H - 8, text, current ? 0 : 6, 8 + 16);
++        if (owned && w != KNEE_WEAPON)
++        {
++            sprintf(text, "%d", p->ammo_amount[w]);
++            minitext(x + cw - 2 - 4 * strlen(text), CELLS_H - 8, text, p->ammo_amount[w] ? 2 : 6, 8 + 16);
++        }
++    }
++    return true;
++}
++
++// Draws the map again when asked, when the view moved, or after a while
++// for what moves on it, returns whether it did
++static bool DrawMap(bool redraw)
++{
++    static int32_t shown_x, shown_y, shown_zoom, frames;
++    static short shown_ang;
++    struct player_struct *pp = &ps[screenpeek];
++    int32_t s_wx1 = wx1, s_wy1 = wy1, s_wx2 = wx2, s_wy2 = wy2;
++    int32_t s_windowy1 = windowy1, s_windowy2 = windowy2;
++
++    if (!redraw && ++frames < MAP_MAX_FRAMES && (frames < MAP_MIN_FRAMES || (pp->oposx == shown_x && pp->oposy == shown_y
++        && pp->oang == shown_ang && map_zoom == shown_zoom)))
++        return false;
++    frames = 0;
++    shown_x = pp->oposx;
++    shown_y = pp->oposy;
++    shown_ang = pp->oang;
++    shown_zoom = map_zoom;
++
++    memset(hud + MAP_Y * HUD_W, 0, MAP_H * HUD_W);
++    // The map is centered on the screen, its rows are kept to the map's part
++    wy1 = MAP_Y << 12;
++    wy2 = (MAP_Y + MAP_H) << 12;
++    windowy1 = MAP_Y;
++    windowy2 = MAP_Y + MAP_H - 1;
++    memcpy(saved_umost, startumost, sizeof(saved_umost));
++    memcpy(saved_dmost, startdmost, sizeof(saved_dmost));
++    memcpy(startumost, map_umost, sizeof(map_umost));
++    memcpy(startdmost, map_dmost, sizeof(map_dmost));
++    drawoverheadmap(pp->oposx, pp->oposy, map_zoom, pp->oang);
++    memcpy(startumost, saved_umost, sizeof(saved_umost));
++    memcpy(startdmost, saved_dmost, sizeof(saved_dmost));
++    wx1 = s_wx1, wy1 = s_wy1, wx2 = s_wx2, wy2 = s_wy2;
++    windowy1 = s_windowy1, windowy2 = s_windowy2;
++    return true;
++}
++
++// Returns whether the game drew anything. The inventory popup, the frame
++// rate and the hidden weapon's icon stay on the top screen, where they
++// would be drawn twice a frame
++static bool DrawStatusBar(void)
++{
++    struct player_struct *p = &ps[screenpeek];
++    int32_t screen_size = ud.screen_size, tickrate = ud.tickrate, hideweapon = ud.hideweapon;
++    int32_t invdisptime = p->invdisptime;
++    STATUSBARTYPE shown = sbar;
++    bool redraw = pus != 0;
++
++    ud.screen_size = 8;
++    ud.tickrate = ud.hideweapon = p->invdisptime = 0;
++    coolgaugetext(screenpeek);
++    ud.screen_size = screen_size, ud.tickrate = tickrate, ud.hideweapon = hideweapon;
++    p->invdisptime = invdisptime;
++    return redraw || memcmp(&shown, &sbar, sizeof(sbar)) != 0;
++}
++
++// Draws the touch screen: the controls once, while playing the parts of the
++// HUD that changed
++void NDS_UpdateSubScreen(void)
++{
++    uint8_t *saved_frameplace = frameplace;
++    int top, bottom;
++    int32_t gm = ps[myconnectindex].gm;
++    bool playing = (gm & MODE_GAME) && !(gm & MODE_MENU) && ud.recstat != 2;
++
++    if (showing != SHOW_CONSOLE && curbrightness != shown_brightness)
++        SetSubPalette();
++    if (!playing && showing == SHOW_CONTROLS)
++        return;
++    if (showing == SHOW_CONSOLE)
++        InitSubScreen();
++    while (dmaBusy(NDS_HUD_DMA))
++        ;
++
++    frameplace = hud;
++    if (!playing)
++    {
++        DrawControls();
++        showing = SHOW_CONTROLS;
++        top = 0;
++        bottom = HUD_H;
++    }
++    else
++    {
++        bool redraw = showing != SHOW_HUD;
++
++        if (redraw)
++        {
++            // Everything drawn again, the status bar too
++            memset(hud, 0, sizeof(hud));
++            memset(&cells_shown, 0xff, sizeof(cells_shown));
++            pus = NUMPAGES;
++            showing = SHOW_HUD;
++        }
++        top = HUD_H;
++        bottom = 0;
++        if (DrawWeaponCells(&ps[screenpeek]))
++            top = 0, bottom = CELLS_H;
++        if (DrawMap(redraw))
++            top = min(top, MAP_Y), bottom = BAR_Y;
++        if (DrawStatusBar())
++            top = min(top, BAR_Y), bottom = HUD_H;
++    }
++    frameplace = saved_frameplace;
++
++    // Only the rows that changed
++    if (top < bottom)
++    {
++        DC_FlushRange(hud + top * HUD_W, (bottom - top) * HUD_W);
++        dmaCopyWordsAsynch(NDS_HUD_DMA, hud + top * HUD_W, (uint8_t *) BG_GFX_SUB + top * HUD_W, (bottom - top) * HUD_W);
++    }
++}
++
++// Weapon cells select the weapon, the inventory box uses the item in it,
++// the map zooms in and out
++void NDS_PollTouch(u32 down)
++{
++    touchPosition touch;
++
++    if (!(down & KEY_TOUCH) || showing != SHOW_HUD)
++        return;
++    touchRead(&touch);
++    if (touch.py < CELLS_H)
++    {
++        int cell = touch.px * 10 / HUD_W;
++
++        NDS_TapScancode(cell == 9 ? sc_0 : sc_1 + cell);
++    }
++    else if (touch.py < BAR_Y)
++        map_zoom = map_zoom >= 1536 ? 192 : map_zoom * 2;
++    else if (touch.px * 320 / HUD_W >= INVENTORY_X1 && touch.px * 320 / HUD_W < INVENTORY_X2)
++        NDS_TapScancode(sc_Return);
++}

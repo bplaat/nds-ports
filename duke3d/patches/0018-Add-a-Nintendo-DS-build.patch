@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nds-ports <nds-ports@localhost>
+Date: Wed, 7 Oct 2026 12:00:00 +0200
+Subject: [PATCH] Add a Nintendo DS build
+
+Makefile.nds builds a DSi enhanced .nds with devkitARM and libnds/calico,
+without SDL and the Apogee Sound System, whose DS versions are in nds/.
+The engine is ARM code, its drawers and memcpy/memset run from ITCM, the
+game is Thumb code, the parts that don't run every frame optimized for
+size. int32_t is made an int as on the PC, newlib's is a long, and the
+warnings modern GCC makes errors of are allowed.
+---
+ .gitignore   |  6 ++++
+ Makefile.nds | 94 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 100 insertions(+)
+ create mode 100644 Makefile.nds
+
+diff --git a/.gitignore b/.gitignore
+index 19b2068..6744e02 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -36,3 +36,9 @@ Makefile.in
+ /config.status
+ /configure
+ /stamp-h1
++
++# Nintendo DS build
++/build/
++/duke3d.elf
++/duke3d.nds
++/duke3d.lst
+diff --git a/Makefile.nds b/Makefile.nds
+new file mode 100644
+index 0000000..3065bea
+--- /dev/null
++++ b/Makefile.nds
+@@ -0,0 +1,94 @@
++#---------------------------------------------------------------------------------
++# Nintendo DS (devkitARM + libnds) build of Chocolate Duke3D
++#   make -f Makefile.nds [ICON=icon.bmp] [NITRO_DIR=dir]
++#---------------------------------------------------------------------------------
++ifeq ($(strip $(DEVKITARM)),)
++$(error "Please set DEVKITARM in your environment. export DEVKITARM=<path to>devkitARM")
++endif
++
++GAME_TITLE     := Duke Nukem 3D
++GAME_SUBTITLE1 := 3D Realms (1996)
++GAME_SUBTITLE2 := Chocolate Duke3D NDS port
++
++TARGET  := duke3d
++BUILD   := build
++OUTPUT  := $(CURDIR)/$(TARGET)
++
++ICON      ?=
++NITRO_DIR ?=
++GAME_ICON := $(or $(ICON),$(DEVKITPRO)/calico/share/nds-icon.bmp)
++ifneq ($(strip $(NITRO_DIR)),)
++NITRO_FILES := $(NITRO_DIR)
++endif
++
++# Must be set before ds_rules, which prepends the calico library path
++LIBPATHS := -L$(DEVKITPRO)/libnds/lib
++
++include $(DEVKITARM)/ds_rules
++
++SRC_ENGINE := cache dummy_multi filesystem network tiles
++SRC_GAME   := actors animlib config console control cvar_defs cvars game gamedef global keyboard \
++	menues player premap rts scriplib sector sounds
++SRC_NDS    := duke3d_nds display_nds input_nds hud_nds fx_nds music_nds stdio_nds
++# The renderer runs as ARM code, its drawers and memcpy/memset from ITCM
++SRC_ARM    := Engine/src/engine Engine/src/fixedPoint_math
++SRC_ITCM   := Engine/src/draw nds/mem_nds
++
++OFILES := $(addprefix $(BUILD)/,$(addsuffix .o,$(addprefix Engine/src/,$(SRC_ENGINE)) \
++	$(addprefix Game/src/,$(SRC_GAME)) $(addprefix nds/,$(SRC_NDS))) \
++	$(addsuffix .arm.o,$(SRC_ARM)) $(addsuffix .itcm.o,$(SRC_ITCM)))
++
++# The code assumes int32_t is int, as on the PC, newlib makes it a long
++INT32    := -U__INT32_TYPE__ -D__INT32_TYPE__=int -U__UINT32_TYPE__ -D__UINT32_TYPE__="unsigned int" \
++	-U__INT_LEAST32_TYPE__ -D__INT_LEAST32_TYPE__=int -U__UINT_LEAST32_TYPE__ -D__UINT_LEAST32_TYPE__="unsigned int"
++# The old code mixes pointers and integers and doesn't build with GCC's newer defaults
++WARNINGS := -Wall -Wno-unused -Wno-pointer-sign -Wno-parentheses -Wno-pointer-to-int-cast \
++	-Wno-int-to-pointer-cast -Wno-int-conversion -Wno-incompatible-pointer-types \
++	-Wno-maybe-uninitialized -Wno-format-truncation -Wno-dangling-pointer
++ARCH     := -march=armv5te -mtune=arm946e-s -mthumb
++CFLAGS   := -g -O2 $(WARNINGS) -ffunction-sections -fdata-sections -fno-strict-aliasing \
++	-fno-aggressive-loop-optimizations -fno-short-enums -fcommon -std=gnu99 $(ARCH) $(INT32) \
++	-DARM9 -DPLATFORM_UNIX -IEngine/src -IGame/src -Inds -I$(LIBNDS)/include -I$(CALICO)/include
++LDFLAGS  := -specs=ds_arm9.specs -g $(ARCH) -Wl,--no-enum-size-warning -Wl,-Map,$(BUILD)/$(TARGET).map
++LIBS     := -lfat -lnds9 -lm
++LD       := $(CC)
++
++.PHONY: all clean
++all: $(OUTPUT).nds
++
++# Like the ds_rules default, plus a proper header title (homebrew game code kept)
++$(OUTPUT).nds: $(OUTPUT).elf $(GAME_ICON) $(wildcard $(NITRO_DIR)/*)
++	$(SILENTCMD)ndstool -c $@ -9 $< $(_ARM7_ELF) -b $(GAME_ICON) "$(GAME_TITLE);$(GAME_SUBTITLE1);$(GAME_SUBTITLE2)" \
++		-g "####" 00 "DUKENUKEM3D" $(_ADDFILES)
++	$(SILENTMSG) built ... $(notdir $@)
++
++$(OUTPUT).elf: $(OFILES)
++
++# The game code that isn't run every frame is optimized for size, which
++# leaves more RAM to the tile cache
++SRC_COLD   := animlib config console control cvar_defs cvars global keyboard menues premap rts scriplib
++$(addprefix $(BUILD)/Game/src/,$(addsuffix .o,$(SRC_COLD))): CFLAGS += -Os
++$(BUILD)/%.arm.o $(BUILD)/%.itcm.o: CFLAGS += -marm
++$(BUILD)/nds/mem_nds.itcm.o: CFLAGS += -fno-builtin -fno-tree-loop-distribute-patterns
++# The startup wants libnds' filesystem.h, not the engine's
++$(BUILD)/nds/duke3d_nds.o: CFLAGS := -I$(LIBNDS)/include $(CFLAGS)
++
++define COMPILE
++	@mkdir -p $(dir $@)
++	$(SILENTMSG) $(notdir $<)
++	$(SILENTCMD)$(CC) -MMD -MP $(_EXTRADEFS) $(CFLAGS) -c $< -o $@
++endef
++
++$(BUILD)/%.arm.o: %.c
++	$(COMPILE)
++
++$(BUILD)/%.itcm.o: %.c
++	$(COMPILE)
++
++$(BUILD)/%.o: %.c
++	$(COMPILE)
++
++clean:
++	rm -rf $(BUILD) $(OUTPUT).elf $(OUTPUT).nds $(TARGET).lst
++
++-include $(OFILES:.o=.d)
