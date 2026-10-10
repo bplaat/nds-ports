@@ -26,10 +26,7 @@ BUILD_DIR="$PORT_DIR/target"
 ASSETS_DIR="$PORT_DIR/assets"
 SRC_DIR="$BUILD_DIR/Quake-$version"
 
-: "${DEVKITPRO:=/opt/devkitpro}"
-: "${DEVKITARM:=$DEVKITPRO/devkitARM}"
-export DEVKITPRO DEVKITARM
-export PATH="$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH"
+TOOLCHAIN_DIR="$(cd ../toolchain && pwd)"
 
 msg() { printf '\033[1;34m[quake]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[quake]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -92,6 +89,8 @@ export_patches() {
 }
 
 build() {
+    "$TOOLCHAIN_DIR/build.sh"
+
     # assets/ is Quake's base directory (id1/, mod directories) and is
     # embedded into the ROM through NitroFS, with lowercase names like Quake uses
     local nitro="$BUILD_DIR/nitrofs" file dest
@@ -104,7 +103,7 @@ build() {
     done < <(cd "$ASSETS_DIR" && find . -type f ! -name '.*' | sed 's|^\./||')
     msg "Embedding $(cd "$nitro" && find . -type f | sed 's|^\./||' | tr '\n' ' ')"
     make -C "$SRC_DIR/WinQuake" -f Makefile.nds -j"$(getconf _NPROCESSORS_ONLN)" \
-        ICON="$PORT_DIR/icon.bmp" NITRO_DIR="$nitro"
+        TOOLCHAIN="$TOOLCHAIN_DIR" ICON="$PORT_DIR/icon.bmp" NITRO_DIR="$nitro"
     cp "$SRC_DIR/WinQuake/quake.nds" "$BUILD_DIR/quake.nds"
     msg "Built target/quake.nds"
 }

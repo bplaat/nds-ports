@@ -25,10 +25,7 @@ BUILD_DIR="$PORT_DIR/target"
 ASSETS_DIR="$PORT_DIR/assets"
 SRC_DIR="$BUILD_DIR/doomgeneric-$version"
 
-: "${DEVKITPRO:=/opt/devkitpro}"
-: "${DEVKITARM:=$DEVKITPRO/devkitARM}"
-export DEVKITPRO DEVKITARM
-export PATH="$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH"
+TOOLCHAIN_DIR="$(cd ../toolchain && pwd)"
 
 msg() { printf '\033[1;34m[doom]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[doom]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -89,6 +86,8 @@ export_patches() {
 }
 
 build() {
+    "$TOOLCHAIN_DIR/build.sh"
+
     # WADs in assets/ are embedded into the ROM through NitroFS
     local nitro="$BUILD_DIR/nitrofs" wad
     rm -rf "$nitro"
@@ -98,7 +97,7 @@ build() {
     done
     msg "Embedding $(cd "$nitro" && echo *)"
     make -C "$SRC_DIR/doomgeneric" -f Makefile.nds -j"$(getconf _NPROCESSORS_ONLN)" \
-        ICON="$PORT_DIR/icon.bmp" NITRO_DIR="$nitro"
+        TOOLCHAIN="$TOOLCHAIN_DIR" ICON="$PORT_DIR/icon.bmp" NITRO_DIR="$nitro"
     cp "$SRC_DIR/doomgeneric/doom.nds" "$BUILD_DIR/doom.nds"
     msg "Built target/doom.nds"
 }

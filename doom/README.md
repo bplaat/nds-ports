@@ -123,7 +123,8 @@ code is written for the DS only, without `__NDS__` checks.
   divide instruction, `FixedDiv`, `SlopeDiv` and the scale of every wall
   column use the DS hardware divider. A wall column's division runs while the
   column is set up, and `SlopeDiv` divides 32 bits when it can, which takes
-  half as long as 64.
+  half as long as 64. The automap clipping divides its 64-bit products with
+  it too.
 - [0012](patches/0012-Keep-Doom-s-proportions-on-square-pixels.patch):
   Doom's 320x200 had pixels 1.2 times taller than wide on a 4:3 monitor, so on
   the square pixels of the DS the vertical projection is 1.2 times the
@@ -174,10 +175,10 @@ of main RAM on a 16-bit bus at half its clock.
 - [0021](patches/0021-Read-response-files.patch): Response files work
   again, for the options in `/data/doom/args.txt`.
 - [0022](patches/0022-Add-a-Nintendo-DS-build.patch): `Makefile.nds` builds
-  a DSi enhanced `.nds` with devkitARM and libnds/calico, without the 32-bit
-  `DG_ScreenBuffer` and SDL_mixer. The renderer, sight checks, fixed point
-  math and `memcpy`/`memset` run from ITCM as ARM code, which is nearly full,
-  the rest is Thumb code in main RAM.
+  a DSi enhanced `.nds` with the [toolchain](../toolchain), without the
+  32-bit `DG_ScreenBuffer` and SDL_mixer. The renderer, sight checks and
+  fixed point math run from ITCM as ARM code, which is nearly full, the rest
+  is Thumb code in main RAM.
 - [0023](patches/0023-Add-the-DS-game-picker.patch): `doomgeneric_nds.c`
   switches the ARM9 to 134 MHz in DSi mode, finds every IWAD and mod in
   NitroFS and on the SD card, shows them in a picker with each game's title
@@ -185,49 +186,44 @@ of main RAM on a 16-bit bus at half its clock.
   `/data/doom/<wad name>/`, keeping mods apart from their IWADs. Doom runs
   in a thread with its stack in main RAM, DTCM
   mostly holds the colormaps. Also the doomgeneric timing interface.
-- [0025](patches/0025-Fit-the-system-layer-to-the-DS.patch): The zone
+- [0024](patches/0024-Fit-the-system-layer-to-the-DS.patch): The zone
   takes all free RAM (4 MiB on the DS, 16 MiB on the DSi), `I_Quit` returns to
   the homebrew launcher, `I_Error` shows the message on the touch screen and
   the startup banner fits the 32 column console.
-- [0026](patches/0026-Add-DS-video.patch): `i_ndsvideo.c` page flips two
+- [0025](patches/0025-Add-DS-video.patch): `i_ndsvideo.c` page flips two
   8bpp VRAM backgrounds on vblank. DMA copies each frame there while the game
   runs its next tic, a row at a time chained by interrupts. Scaled frames use
   the affine background hardware, smoothed by a second layer half a pixel
   further that is alpha blended on top. Doom's palette lives in the hardware
   palette, so damage and pickup flashes cost nothing.
-- [0027](patches/0027-Add-DS-buttons.patch): `i_ndsinput.c` maps the
+- [0026](patches/0026-Add-DS-buttons.patch): `i_ndsinput.c` maps the
   buttons to game keys while playing and to menu keys in the menus.
-- [0028](patches/0028-Add-the-DS-touch-screen.patch): `i_ndstouch.c` draws
+- [0027](patches/0027-Add-the-DS-touch-screen.patch): `i_ndstouch.c` draws
   the status bar, automap and weapon cells from the WAD's own graphics, copies
   them to VRAM by DMA and selects a weapon when its cell is tapped. It keeps
   copies of the lumps it draws, Doom makes cached lumps purgeable again when
   it uses them itself.
-- [0029](patches/0029-Add-DS-music.patch): `i_ndsmusic.c` plays MUS and
+- [0028](patches/0028-Add-DS-music.patch): `i_ndsmusic.c` plays MUS and
   MIDI on a wavetable synth on hardware channels 8-15, with waveforms per
   instrument family and synthesized drums, sequenced by a 140 Hz thread.
-- [0030](patches/0030-Add-DS-sound-effects.patch): `i_ndssound.c` plays
+- [0029](patches/0029-Add-DS-sound-effects.patch): `i_ndssound.c` plays
   sound effects on hardware channels 0-7, which do the resampling, volume and
   stereo panning.
-- [0031](patches/0031-Copy-memory-fast-on-the-DS.patch): `mem_nds.c`
-  replaces newlib's `memcpy` and `memset`, which copy a byte at a time in
-  Thumb mode, with word copies from ITCM.
-- [0032](patches/0032-Use-single-precision-and-reduce-floating-point-work.patch):
+- [0030](patches/0030-Use-single-precision-and-reduce-floating-point-work.patch):
   Float settings are read and written in thousandths without the C
   library's float code, the mouse math is single precision, and the music
   reuses sine samples across harmonics and normalizes with one division per
   wave.
-- [0033](patches/0033-Leave-scanf-and-the-float-printf-out.patch): Numbers
+- [0031](patches/0031-Leave-scanf-and-the-float-printf-out.patch): Numbers
   are read with `strtoul` and the settings file line by line, the timedemo
-  result is shown in thousandths; `stdio_nds.c` sends all printing to
-  newlib's integer-only printf and reads libnds' console escapes with a
-  small `siscanf`, so scanf, the float printf and their Unicode tables are
-  out of the ROM (72 KiB).
-- [0034](patches/0034-Skip-the-WAD-checksum-only-netgames-use.patch): The
+  result is shown in thousandths: the small C library of the toolchain has
+  no `fscanf` and no exact float printf.
+- [0032](patches/0032-Skip-the-WAD-checksum-only-netgames-use.patch): The
   WAD directory's SHA-1, only used by the network client that isn't built,
   isn't worked out at startup.
-- [0035](patches/0035-Build-the-trig-tables-at-startup.patch): `finesine`,
+- [0033](patches/0033-Build-the-trig-tables-at-startup.patch): `finesine`,
   `finetangent` and `tantoangle` are built at startup from a quarter, a
   half and the shrinking steps, the same to the bit (demos stay in sync),
   51 KiB less ROM for 14 KiB more RAM.
-- [0036](patches/0036-Pack-the-states-into-20-bytes.patch): `state_t`
+- [0034](patches/0034-Pack-the-states-into-20-bytes.patch): `state_t`
   uses shorts for its small fields, 20 bytes a state instead of 28.

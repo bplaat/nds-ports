@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: nds-ports <nds-ports@localhost>
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
 Date: Sun, 4 Oct 2026 12:18:34 +0200
 Subject: [PATCH] Add the DS touch screen
 
@@ -16,16 +16,17 @@ Tapping a cell selects the weapon. Outside of a game it shows BJ and the
 controls. The lid puts the DS to sleep, the DSi power button or
 L+R+START+SELECT quit.
 ---
- nds/wl_touch.c | 853 +++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 853 insertions(+)
+ nds/wl_touch.c | 854 +++++++++++++++++++++++++++++++++++++++++++++++++
+ wl_play.c      |   3 +-
+ 2 files changed, 856 insertions(+), 1 deletion(-)
  create mode 100644 nds/wl_touch.c
 
 diff --git a/nds/wl_touch.c b/nds/wl_touch.c
 new file mode 100644
-index 0000000..4a8ff30
+index 0000000..7e6ab14
 --- /dev/null
 +++ b/nds/wl_touch.c
-@@ -0,0 +1,853 @@
+@@ -0,0 +1,854 @@
 +//
 +// The Nintendo DS touch screen for Wolf4SDL
 +//
@@ -98,15 +99,16 @@ index 0000000..4a8ff30
 +static unsigned status_hash, cells_hash, texts_hash;
 +static int touch_cell = -1;
 +
-+// Tiles seen this level, and the level they belong to
-+static bool seen[MAPSIZE][MAPSIZE];
++// Tiles seen this level, and the level they belong to. The tile arrays are
++// compared a word at a time, so they're word aligned like spotvis.
++static bool seen[MAPSIZE][MAPSIZE] __attribute__((aligned(4)));
 +static int seen_level = -1;
 +static int32_t seen_time;
 +
 +// What the map shows: the colors of the items on the tiles, how far the
 +// doors are open, the statics, whether the pushwall moved and where the
 +// player looks, -1 when not shown yet
-+static byte items[MAPSIZE][MAPSIZE];
++static byte items[MAPSIZE][MAPSIZE] __attribute__((aligned(4)));
 +static int8_t door_open[MAXDOORS];
 +static short stat_shapes[MAXSTATS];
 +static int stat_count = -1, pwall_shown = -1, arrow_angle = -1;
@@ -546,7 +548,7 @@ index 0000000..4a8ff30
 +// Draws the tiles whose items were picked up or dropped
 +static void UpdateItems (void)
 +{
-+    static byte shown[MAPSIZE][MAPSIZE];
++    static byte shown[MAPSIZE][MAPSIZE] __attribute__((aligned(4)));
 +    const u32 *old = (const u32 *) shown, *now = (const u32 *) items;
 +    statobj_t *stat;
 +    int i, b;
@@ -879,3 +881,17 @@ index 0000000..4a8ff30
 +        NDS_PushKey (SDL_SCANCODE_1 + touch_cell, true);
 +    }
 +}
+diff --git a/wl_play.c b/wl_play.c
+index 98cf24b..541e65e 100644
+--- a/wl_play.c
++++ b/wl_play.c
+@@ -37,7 +37,8 @@ boolean singlestep,godmode,noclip,ammocheat,mapreveal;
+ int     extravbls;
+ 
+ tiletype tilemap[MAPSIZE][MAPSIZE]; // wall values only
+-bool     spotvis[MAPSIZE][MAPSIZE];
++// word aligned, the DS touch screen compares it a word at a time
++bool     spotvis[MAPSIZE][MAPSIZE] __attribute__((aligned(4)));
+ objtype *actorat[MAPSIZE][MAPSIZE];
+ #ifdef REVEALMAP
+ bool     mapseen[MAPSIZE][MAPSIZE];

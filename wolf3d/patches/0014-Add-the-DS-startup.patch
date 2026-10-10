@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: nds-ports <nds-ports@localhost>
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
 Date: Sun, 4 Oct 2026 12:18:34 +0200
 Subject: [PATCH] Add the DS startup
 
@@ -15,24 +15,22 @@ each step. As soon as the
 data is found the title picture shows on the top screen while the game
 loads: only its chunk is read and expanded. Invalid Huffman nodes and
 incomplete title pictures are rejected. Errors are shown on the
-touch screen console, failed assertions too. The console's siscanf,
-which only has to read numbers, and its printing through the string
-formatter leave newlib's scanf and its second printf engine out.
-wl_nds.h is the glue between the SDL implementation and the game.
+touch screen console, failed assertions too. wl_nds.h is the glue
+between the SDL implementation and the game.
 ---
- nds/wl_nds.c | 385 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ nds/wl_nds.c | 337 +++++++++++++++++++++++++++++++++++++++++++++++++++
  nds/wl_nds.h |  46 +++++++
  wl_main.c    |   2 +
- 3 files changed, 433 insertions(+)
+ 3 files changed, 385 insertions(+)
  create mode 100644 nds/wl_nds.c
  create mode 100644 nds/wl_nds.h
 
 diff --git a/nds/wl_nds.c b/nds/wl_nds.c
 new file mode 100644
-index 0000000..fdf63fa
+index 0000000..f23d205
 --- /dev/null
 +++ b/nds/wl_nds.c
-@@ -0,0 +1,385 @@
+@@ -0,0 +1,337 @@
 +//
 +// Starts Wolf4SDL on the Nintendo DS
 +//
@@ -70,54 +68,6 @@ index 0000000..fdf63fa
 +#define MAX_ARGS 32
 +
 +static PrintConsole console;
-+
-+// The console reads its escape sequences ("[%d;%dm") with siscanf, this one
-+// only knows %d, which leaves newlib's scanf and its Unicode tables out
-+int siscanf (const char *str, const char *format, ...)
-+{
-+    va_list args;
-+    int count = 0;
-+
-+    va_start (args, format);
-+    for (; *format; ++format, ++str)
-+    {
-+        if (format[0] == '%' && format[1] == 'd')
-+        {
-+            char *end;
-+            long value;
-+
-+            while (isspace ((unsigned char) *str))
-+                ++str;
-+            value = strtol (str, &end, 10);
-+            if (end == str)
-+                break;
-+            *va_arg (args, int *) = (int) value;
-+            ++count;
-+            ++format;
-+            str = end - 1;
-+        }
-+        else if (*str != *format)
-+            break;
-+    }
-+    va_end (args);
-+    return count;
-+}
-+
-+// The console's printing goes through the string formatter too, which leaves
-+// newlib's second printf engine, for streams, out. The buffer is static, not
-+// allocated, so errors still show when the heap is full.
-+int iprintf (const char *format, ...)
-+{
-+    static char text[512];
-+    va_list args;
-+    int len;
-+
-+    va_start (args, format);
-+    len = vsniprintf (text, sizeof(text), format, args);
-+    va_end (args);
-+    fputs (text, stdout);
-+    return len;
-+}
 +
 +static void ConsoleMode (void)
 +{

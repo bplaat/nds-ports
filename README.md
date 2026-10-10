@@ -1,8 +1,8 @@
 # NDS Ports
 
-PC games ported to the Nintendo DS (and DSi), built with
-[devkitPro](https://devkitpro.org) (devkitARM + libnds/calico). Like the
-[SerenityOS ports tree](https://github.com/SerenityOS/serenity/tree/master/Ports),
+PC games ported to the Nintendo DS (and DSi), built with clang and lld on
+devkitPro's calico and libnds, which the [toolchain](toolchain) builds from
+source. Like the [SerenityOS ports tree](https://github.com/SerenityOS/serenity/tree/master/Ports),
 every port fetches a pinned upstream source release and applies patch files on
 top, so the upstream code stays untouched in this repository.
 
@@ -57,12 +57,27 @@ Quake the game folder (such as `id1`), and Wolf3D the data extension
 
 ## Getting Started
 
-- Install [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `nds-dev` group
-- Build a port with its `build.sh`, for example:
+The ports build with a normal LLVM toolchain (clang 18 or newer, lld and llvm-ar). The
+[toolchain](toolchain) script clones calico, libnds, libdvm, FatFs, the
+default ARM7 program, ndstool and LLVM's compiler-rt builtins, patches and
+builds them the first time you build a port. Install LLVM and the
+[melonDS](https://melonds.kuribo64.net/) emulator:
 
-    ```sh
-    doom/build.sh
-    ```
+```sh
+# macOS
+brew install llvm lld
+brew install --cask melonds
+
+# Ubuntu 24.04 or newer, older releases need a newer clang from apt.llvm.org
+sudo apt install clang lld llvm g++ make git curl unzip melonds
+```
+
+- Build a port with its `build.sh`, the ROM ends up in `target/<port>.nds`,
+  for example:
+
+  ```sh
+  doom/build.sh
+  ```
 
 - To change a port, run `./build.sh dev`, edit and commit in the patched source
   tree in `target/`, then `./build.sh export-patches` writes the commits back to

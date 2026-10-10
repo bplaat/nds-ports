@@ -33,10 +33,7 @@ BUILD_DIR="$PORT_DIR/target"
 ASSETS_DIR="$PORT_DIR/assets"
 SRC_DIR="$BUILD_DIR/Wolf4SDL-$version"
 
-: "${DEVKITPRO:=/opt/devkitpro}"
-: "${DEVKITARM:=$DEVKITPRO/devkitARM}"
-export DEVKITPRO DEVKITARM
-export PATH="$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH"
+TOOLCHAIN_DIR="$(cd ../toolchain && pwd)"
 
 msg() { printf '\033[1;34m[wolf3d]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[wolf3d]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -116,6 +113,8 @@ export_patches() {
 }
 
 build() {
+    "$TOOLCHAIN_DIR/build.sh"
+
     # The game data files in assets/ are embedded into the ROM through
     # NitroFS, with the lowercase names Wolf4SDL opens
     local nitro="$BUILD_DIR/nitrofs" file
@@ -128,7 +127,7 @@ build() {
     done
     msg "Embedding $(cd "$nitro" && echo *)"
     make -C "$SRC_DIR" -f Makefile.nds -j"$(getconf _NPROCESSORS_ONLN)" \
-        ICON="$PORT_DIR/icon.bmp" NITRO_DIR="$nitro"
+        TOOLCHAIN="$TOOLCHAIN_DIR" ICON="$PORT_DIR/icon.bmp" NITRO_DIR="$nitro"
     cp "$SRC_DIR/wolf3d.nds" "$BUILD_DIR/wolf3d.nds"
     msg "Built target/wolf3d.nds"
 }

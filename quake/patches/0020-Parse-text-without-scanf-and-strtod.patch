@@ -1,14 +1,14 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: nds-ports <nds-ports@localhost>
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
 Date: Tue, 6 Oct 2026 07:09:59 +0200
 Subject: [PATCH] Parse text without scanf and strtod
 
 Savegames, their comments for the menu and point files are read a word
 at a time with COM_ReadWord and Q_atof instead of fscanf, entity fields
-with Q_atof instead of atof. The C library's scanf and strtod, with
-their wide character tables, take more room than all of Quake's menus.
-Truncated light styles and saves exceeding the console's entity capacity
-return to the menu. Failed map loads close the save file.
+with Q_atof instead of atof. The small C library of the DS toolchain has
+neither scanf nor strtod. Truncated light styles and saves exceeding the
+console's entity capacity return to the menu. Failed map loads close the
+save file.
 ---
  WinQuake/common.c   | 22 ++++++++++++++++++++++
  WinQuake/common.h   |  1 +
@@ -19,7 +19,7 @@ return to the menu. Failed map loads close the save file.
  6 files changed, 46 insertions(+), 13 deletions(-)
 
 diff --git a/WinQuake/common.c b/WinQuake/common.c
-index 6da0f96..c1927ae 100644
+index 38f631c..9a6a41c 100644
 --- a/WinQuake/common.c
 +++ b/WinQuake/common.c
 @@ -901,6 +901,28 @@ void COM_DefaultExtension (char *path, char *extension)

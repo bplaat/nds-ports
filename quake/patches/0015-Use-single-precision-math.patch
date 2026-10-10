@@ -1,19 +1,19 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: nds-ports <nds-ports@localhost>
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
 Date: Tue, 6 Oct 2026 07:09:57 +0200
 Subject: [PATCH] Use single precision math
 
-The ARM9 has no floating point unit, the float versions of sqrt, sin,
-cos, tan, atan and atan2 are a lot cheaper in software than the double
-ones. They are used everywhere: VectorNormalize and Length for the
-physics, AngleVectors for every entity, the view bob and the monster
-movement. R_DrawParticles converts the double client time to a float
-once instead of for every particle.
+The ARM9 has no floating point unit, the float versions of the math
+functions are a lot cheaper in software than the double ones, which the
+small C library of the DS toolchain leaves out. They are used everywhere:
+VectorNormalize and Length for the physics, AngleVectors for every
+entity, the view bob and the monster movement. R_DrawParticles converts
+the double client time to a float once instead of for every particle.
 ---
  WinQuake/mathlib.c |  8 +++-----
- WinQuake/mathlib.h | 11 +++++++++++
+ WinQuake/mathlib.h | 12 ++++++++++++
  WinQuake/r_part.c  |  6 ++++--
- 3 files changed, 18 insertions(+), 7 deletions(-)
+ 3 files changed, 19 insertions(+), 7 deletions(-)
 
 diff --git a/WinQuake/mathlib.c b/WinQuake/mathlib.c
 index 9f5d644..aae774c 100644
@@ -46,10 +46,10 @@ index 9f5d644..aae774c 100644
  {
  	int		i;
 diff --git a/WinQuake/mathlib.h b/WinQuake/mathlib.h
-index b5506e2..36bc8ae 100644
+index b5506e2..5e63000 100644
 --- a/WinQuake/mathlib.h
 +++ b/WinQuake/mathlib.h
-@@ -31,6 +31,17 @@ typedef	int	fixed16_t;
+@@ -31,6 +31,18 @@ typedef	int	fixed16_t;
  #define M_PI		3.14159265358979323846	// matches value in gcc v2 math.h
  #endif
  
@@ -63,6 +63,7 @@ index b5506e2..36bc8ae 100644
 +#define	floor(x)	floorf(x)
 +#define	ceil(x)		ceilf(x)
 +#define	pow(x,y)	powf(x,y)
++#define	fabs(x)		fabsf(x)
 +
  struct mplane_s;
  

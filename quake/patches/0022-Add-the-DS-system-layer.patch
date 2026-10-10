@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: nds-ports <nds-ports@localhost>
+From: Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
 Date: Tue, 6 Oct 2026 07:09:59 +0200
 Subject: [PATCH] Add the DS system layer
 
@@ -24,15 +24,15 @@ player is named after the user of the DS settings.
 ---
  WinQuake/common.c  |  28 ++-
  WinQuake/sys.h     |   3 +
- WinQuake/sys_nds.c | 511 +++++++++++++++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 538 insertions(+), 4 deletions(-)
+ WinQuake/sys_nds.c | 419 +++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 446 insertions(+), 4 deletions(-)
  create mode 100644 WinQuake/sys_nds.c
 
 diff --git a/WinQuake/common.c b/WinQuake/common.c
-index c1927ae..23e0bcf 100644
+index 9a6a41c..37f3770 100644
 --- a/WinQuake/common.c
 +++ b/WinQuake/common.c
-@@ -1748,6 +1748,26 @@ void COM_AddGameDirectory (char *dir)
+@@ -1750,6 +1750,26 @@ void COM_AddGameDirectory (char *dir)
  
  }
  
@@ -59,7 +59,7 @@ index c1927ae..23e0bcf 100644
  /*
  ================
  COM_InitFilesystem
-@@ -1798,12 +1817,12 @@ void COM_InitFilesystem (void)
+@@ -1800,12 +1820,12 @@ void COM_InitFilesystem (void)
  //
  // start up with GAMENAME by default (id1)
  //
@@ -75,7 +75,7 @@ index c1927ae..23e0bcf 100644
  
  //
  // -game <gamedir>
-@@ -1813,7 +1832,7 @@ void COM_InitFilesystem (void)
+@@ -1815,7 +1835,7 @@ void COM_InitFilesystem (void)
  	if (i && i < com_argc-1)
  	{
  		com_modified = true;
@@ -100,10 +100,10 @@ index c5d61a7..1b19721 100644
  double Sys_FloatTime (void);
 diff --git a/WinQuake/sys_nds.c b/WinQuake/sys_nds.c
 new file mode 100644
-index 0000000..f340d38
+index 0000000..6de9d49
 --- /dev/null
 +++ b/WinQuake/sys_nds.c
-@@ -0,0 +1,511 @@
+@@ -0,0 +1,419 @@
 +/*
 +Copyright (C) 1996-1997 Id Software, Inc.
 +
@@ -156,98 +156,6 @@ index 0000000..f340d38
 +#define LOG_DOTS			28		// a row with two columns of margin on both sides
 +#define LOG_ROWS			2
 +static TickTask	tick_task;
-+
-+// newlib has a formatter for strings, one for files and integer only ones,
-+// each several KiB. Quake's files and libnds' console are printed with the
-+// one of vsnprintf, which Quake needs for its floats anyway.
-+int vfprintf (FILE *f, const char *fmt, va_list args)
-+{
-+	char	text[1024], *out = text;
-+	va_list	again;
-+	int		len;
-+
-+	va_copy (again, args);
-+	len = vsnprintf (text, sizeof(text), fmt, args);
-+	if (len >= (int) sizeof(text))
-+	{
-+		if ((out = malloc (len + 1)))
-+			vsnprintf (out, len + 1, fmt, again);
-+		else
-+			out = text, len = sizeof(text) - 1;		// cut off, the hunk has the memory
-+	}
-+	va_end (again);
-+	if (len < 0)
-+		return -1;
-+	len = fwrite (out, 1, len, f);
-+	if (out != text)
-+		free (out);
-+	return len;
-+}
-+
-+int fprintf (FILE *f, const char *fmt, ...)
-+{
-+	va_list	args;
-+	int		len;
-+
-+	va_start (args, fmt);
-+	len = vfprintf (f, fmt, args);
-+	va_end (args);
-+	return len;
-+}
-+
-+int fiprintf (FILE *f, const char *fmt, ...) __attribute__((alias ("fprintf")));
-+
-+int viprintf (const char *fmt, va_list args)
-+{
-+	return vfprintf (stdout, fmt, args);
-+}
-+
-+int printf (const char *fmt, ...)
-+{
-+	va_list	args;
-+	int		len;
-+
-+	va_start (args, fmt);
-+	len = vfprintf (stdout, fmt, args);
-+	va_end (args);
-+	return len;
-+}
-+
-+int iprintf (const char *fmt, ...) __attribute__((alias ("printf")));
-+
-+// libnds' console reads its escape sequences, like "[%d;%dm", with siscanf,
-+// which only needs numbers and the characters around them
-+int siscanf (const char *str, const char *fmt, ...)
-+{
-+	va_list	args;
-+	char	*end;
-+	int		n, value;
-+
-+	va_start (args, fmt);
-+	for (n = 0; *fmt; fmt++)
-+	{
-+		if (fmt[0] == '%' && fmt[1] == 'd')
-+		{
-+			value = strtol (str, &end, 10);
-+			if (end == str)
-+				break;
-+			*va_arg (args, int *) = value;
-+			str = end;
-+			fmt++;
-+			n++;
-+		}
-+		else if (*str++ != *fmt)
-+			break;
-+	}
-+	va_end (args);
-+	return n;
-+}
-+
-+// setjmp's unwind table names the ARM exception handling personality
-+// routine, which would link libgcc's unwinder: C code never unwinds
-+void __aeabi_unwind_cpp_pr0 (void)
-+{
-+}
 +
 +// The tick counter behind Sys_FloatTime only runs while a tick task is
 +// scheduled, this one keeps it going

@@ -86,10 +86,11 @@ written for the DS only, without `__NDS__` checks.
 
 ### Fixes
 
-- [0001](patches/0001-Fix-undefined-behavior-that-modern-GCC-miscompiles.patch):
+- [0001](patches/0001-Fix-undefined-behavior-that-modern-compilers-miscomp.patch):
   Two loops filled two dimensional arrays past the end of their first row,
-  which modern GCC cuts short, and `SV_RecursiveHullCheck` had no prototype
-  for its float arguments.
+  which modern GCC cuts short, `SV_RecursiveHullCheck` had no prototype for
+  its float arguments and the byte order test read a short from a byte
+  array that can be misaligned.
 
 ### Menus and screens
 
@@ -164,8 +165,8 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   client interpolates the entities in between. A short button press between
   two server frames still counts.
 - [0015](patches/0015-Use-single-precision-math.patch): The float
-  versions of `sqrt`, `sin`, `cos`, the arc tangents, `floor`, `ceil` and
-  `pow` are used everywhere, a lot cheaper in software, and the particles
+  versions of `sqrt`, `sin`, `cos`, the arc tangents, `floor`, `ceil`, `pow`
+  and `fabs` are used everywhere, a lot cheaper in software, and the particles
   are compared with the client time in single precision.
 - [0016](patches/0016-Work-out-the-sound-positions-in-integers.patch):
   `SND_Spatialize` works in integers with the DS square root and divider
@@ -183,20 +184,18 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   every temporary file buffer while a level loads.
 - [0020](patches/0020-Parse-text-without-scanf-and-strtod.patch):
   Savegames, their comments for the menu and point files are read a word at
-  a time (`COM_ReadWord`) and numbers with `Q_atof`, so newlib's `fscanf`
-  and `strtod`, with their wide character tables, aren't linked. The code
-  is in RAM on the DS, this leaves 30 KiB more for the game.
+  a time (`COM_ReadWord`) and numbers with `Q_atof`, the small C library of
+  the [toolchain](../toolchain) has neither `fscanf` nor `strtod`.
 
 ### The DS platform
 
 - [0021](patches/0021-Add-a-Nintendo-DS-build.patch): `Makefile.nds`
-  builds a DSi enhanced `.nds` with devkitARM and libnds/calico. The
-  collision code, `memcpy`/`memset` and libgcc's software floating point,
-  taken out of libgcc, run from ITCM as ARM code, `HOT_CODE` puts single
-  functions there, like the QuakeC interpreter, the rest is Thumb code in
-  main RAM. Float comparisons come from `fcmp_nds.s`, without the three
-  calls and five saved registers of libgcc's, which made a fifth of the
-  time in fights. Constants are single precision, so they don't drag
+  builds a DSi enhanced `.nds` with the [toolchain](../toolchain). The
+  collision code and compiler-rt's software floating point, taken out of
+  compiler-rt, run from ITCM as ARM code, `HOT_CODE` puts single functions
+  there, like the QuakeC interpreter, the rest is Thumb code in main RAM.
+  Float comparisons come from `fcmp_nds.s`, without the two calls of
+  compiler-rt's. Constants are single precision, so they don't drag
   expressions to double.
 - [0022](patches/0022-Add-the-DS-system-layer.patch): `sys_nds.c` switches
   the ARM9 to 134 MHz in DSi mode, runs Quake in a thread with its stack in
@@ -206,10 +205,7 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   full game, mission pack or mod) with loading dots and errors on the
   touch screen. The game data in the ROM
   is searched before the SD card, which gets the written files. The player is
-  named after the user of the DS settings. `fprintf`, `printf` and libnds'
-  console format with `vsnprintf`, a short `siscanf` reads the console's
-  escape sequences, so newlib's formatters for files and integers and its
-  scanf aren't linked, nor libgcc's stack unwinder.
+  named after the user of the DS settings.
 - [0023](patches/0023-Add-the-DS-3D-renderer.patch): `r_nds.c` draws the
   world, brush and alias models, sprites and particles with the geometry
   engine. Vertices are 16-bit fixed point world coordinates and surfaces are
@@ -246,7 +242,8 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   into the same buffer, whose rows get back what the touch screen shows
   when drawn again: it's cut into tiles for the same layers on the top
   screen, scrolled to the middle, only the tiles with something on them take
-  VRAM and only the ones that changed are copied.
+  VRAM and only the ones that changed are written, to slots the shown menu
+  doesn't use, its new map shows at the next vblank so nothing tears.
 - [0025](patches/0025-Add-DS-buttons.patch): `in_nds.c` maps the buttons
   to Quake's keys and taps to the weapons and handles the lid and power
   button.
@@ -267,6 +264,8 @@ with 32 KiB of ITCM for code and 16 KiB of DTCM for data at full speed.
   not with the level, and only the sounds that play stay in the cache, the
   ambient ones only near water or sky, so the models aren't pushed out of
   it.
-- [0028](patches/0028-Copy-memory-fast-on-the-DS.patch): `mem_nds.c`
-  replaces newlib's `memcpy` and `memset`, which copy a byte at a time in
-  Thumb mode, with word copies from ITCM.
+- [0028](patches/0028-Keep-the-time-in-single-precision.patch): The clocks
+  (`realtime`, `host_frametime`, `cl.time`, `sv.time` and the network
+  timers) are floats instead of doubles, so the physics, view and particle
+  code works in single precision, several times faster in software. A float
+  clock still resolves a millisecond after more than four hours.
